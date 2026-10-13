@@ -908,16 +908,30 @@ function createAgentRuntimeMain(options = {}) {
             stateRuntime.updateAccountQuota(null, accountQuotas);
           }
         };
-        const annotateCodexMetadata = () => {
-          if (!sessionOptions.contextUsage
-            && !Object.prototype.hasOwnProperty.call(sessionOptions, "planProgress")) return false;
+        const annotateCodexMetadata = ({ includePlanProgress = true } = {}) => {
+          let planProgressAllowed = includePlanProgress
+            && Object.prototype.hasOwnProperty.call(sessionOptions, "planProgress");
+          const planTurnId = normalizeCodexTurnId(sessionOptions.planProgressTurnId);
+          const fenceSnapshot = codexTurnFence.getSnapshot(sessionId);
+          if (planProgressAllowed) {
+            if (event === "event_msg:token_count" && !planTurnId) {
+              planProgressAllowed = false;
+            } else if (planTurnId && fenceSnapshot
+              && (fenceSnapshot.terminalLatch || fenceSnapshot.currentTurnId !== planTurnId)) {
+              planProgressAllowed = false;
+            }
+          }
+          if (!sessionOptions.contextUsage && !planProgressAllowed) return false;
           const stateRuntime = getStateRuntime();
           if (!stateRuntime || typeof stateRuntime.updateSessionMetadata !== "function") return false;
           return stateRuntime.updateSessionMetadata(sessionId, {
             contextUsage: sessionOptions.contextUsage,
-            expectedAgentId: "codex",
-            ...(Object.prototype.hasOwnProperty.call(sessionOptions, "planProgress")
-              ? { planProgress: sessionOptions.planProgress }
+            ...(planProgressAllowed
+              ? {
+                planProgress: sessionOptions.planProgress,
+                planProgressTurnId: planTurnId,
+                expectedAgentId: "codex",
+              }
               : {}),
           });
         };
@@ -944,7 +958,7 @@ function createAgentRuntimeMain(options = {}) {
           agentId: "codex",
           profileId: sessionIdentity.profileId,
         })) {
-          annotateCodexMetadata();
+          annotateCodexMetadata({ includePlanProgress: false });
           annotateCodexAccountQuota();
           return;
         }
@@ -955,7 +969,7 @@ function createAgentRuntimeMain(options = {}) {
         const tombstoned = hasCodexSessionEndTombstone(sessionId);
         const tombstoneTurnStart = tombstoned && isCodexJsonlTurnStart(event, extra);
         if (tombstoned && !tombstoneTurnStart) {
-          annotateCodexMetadata();
+          annotateCodexMetadata({ includePlanProgress: false });
           annotateCodexAccountQuota();
           return;
         }
@@ -985,7 +999,7 @@ function createAgentRuntimeMain(options = {}) {
           ) {
             recordCodexWebSearchRecapOnly(sessionIdentity, sessionOptions, event, extra);
           }
-          annotateCodexMetadata();
+          annotateCodexMetadata({ includePlanProgress: false });
           annotateCodexAccountQuota();
           return;
         }

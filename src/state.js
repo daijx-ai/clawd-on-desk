@@ -1716,6 +1716,10 @@ function updateSessionMetadata(sessionId, opts = {}) {
   const incomingContextUsage = normalizeContextUsage(opts.contextUsage);
   const hasPlanProgress = Object.prototype.hasOwnProperty.call(opts, "planProgress");
   const incomingPlanProgress = hasPlanProgress ? normalizePlanProgress(opts.planProgress) : undefined;
+  const hasPlanProgressTurnId = Object.prototype.hasOwnProperty.call(opts, "planProgressTurnId");
+  const incomingPlanProgressTurnId = hasPlanProgressTurnId
+    ? normalizeCodexTurnId(opts.planProgressTurnId)
+    : null;
   const incomingTitle = typeof opts.sessionTitle === "string"
     ? normalizeTitle(opts.sessionTitle)
     : null;
@@ -1724,10 +1728,17 @@ function updateSessionMetadata(sessionId, opts = {}) {
   if (!incomingContextUsage && !clearContextUsage && !incomingTitle && !incomingModel
     && !hasPlanProgress) return false;
   let applied = false;
-  if (hasPlanProgress && session.agentId === "codex"
-    && JSON.stringify(session.planProgress || null) !== JSON.stringify(incomingPlanProgress)) {
-    session.planProgress = incomingPlanProgress;
-    applied = true;
+  const currentCodexTurnId = normalizeCodexTurnId(session.codexTurnId);
+  const planTurnMatches = !currentCodexTurnId || currentCodexTurnId === incomingPlanProgressTurnId;
+  if (hasPlanProgress && hasPlanProgressTurnId && session.agentId === "codex" && planTurnMatches) {
+    if (!currentCodexTurnId && incomingPlanProgressTurnId) {
+      session.codexTurnId = incomingPlanProgressTurnId;
+      applied = true;
+    }
+    if (JSON.stringify(session.planProgress || null) !== JSON.stringify(incomingPlanProgress)) {
+      session.planProgress = incomingPlanProgress;
+      applied = true;
+    }
   }
   if (clearContextUsage) {
     if (session.contextUsage || session.contextUsageOrigin) {
@@ -2321,6 +2332,8 @@ function updateSession(sessionId, state, event, opts = {}) {
     contextUsage = null,
     contextUsageOrigin = null,
     planProgress = undefined,
+    planProgressTurnId = undefined,
+    turnId = null,
     assistantLastOutput = null,
     assistantLastOutputTruncated = false,
     toolName = null,
@@ -2666,13 +2679,23 @@ function updateSession(sessionId, state, event, opts = {}) {
   const normalizedPlanProgress = planProgress === undefined ? undefined : normalizePlanProgress(planProgress);
   const startsNewCodexTurn = srcAgentId === "codex"
     && (event === "UserPromptSubmit" || event === "event_msg:task_started");
+  const normalizedCodexTurnId = srcAgentId === "codex" ? normalizeCodexTurnId(turnId) : null;
+  const srcCodexTurnId = srcAgentId !== "codex"
+    ? null
+    : (startsNewCodexTurn
+      ? normalizedCodexTurnId
+      : (normalizedCodexTurnId || (existing && existing.codexTurnId) || null));
+  const normalizedPlanProgressTurnId = planProgressTurnId === undefined
+    ? normalizedCodexTurnId
+    : normalizeCodexTurnId(planProgressTurnId);
+  const planProgressTurnMatches = normalizedPlanProgressTurnId === srcCodexTurnId;
   const srcPlanProgress = srcAgentId !== "codex"
     ? null
     : (startsNewCodexTurn
       ? null
       : (normalizedPlanProgress === undefined
         ? (existing && existing.planProgress) || null
-        : normalizedPlanProgress));
+        : (planProgressTurnMatches ? normalizedPlanProgress : (existing && existing.planProgress) || null)));
   const incomingAssistantLastOutput = normalizeAssistantOutput(assistantLastOutput);
   const srcAssistantLastOutput = incomingAssistantLastOutput;
   const srcAssistantLastOutputTruncated = !!(
@@ -2967,7 +2990,7 @@ function updateSession(sessionId, state, event, opts = {}) {
     clearSubagentTracker(subagentTracker);
   }
 
-  const base = { sourcePid: srcPid, wtHwnd: srcWtHwnd, cwd: srcCwd, editor: srcEditor, pidChain: srcPidChain, tmuxSocket: srcTmuxSocket, tmuxClient: srcTmuxClient, orcaPaneKey: srcOrcaPaneKey, herdrPaneId: srcHerdr.herdrPaneId, herdrSocket: srcHerdr.herdrSocket, agentPid: srcAgentPid, agentId: srcAgentId, profileId: (existing && existing.profileId) || profileId || "local", rawSessionId: (existing && existing.rawSessionId) || rawSessionId || sessionId, sessionAutomationIdentity: srcSessionAutomationIdentity, host: srcHost, wslDistro: srcWslDistro, headless: srcHeadless, platform: srcPlatform, model: srcModel, provider: srcProvider, codexOriginator: srcCodexOriginator, codexSource: srcCodexSource, dshCarrier: srcDshCarrier, ghosttyTerminalId: srcGhosttyTerminalId, sessionTitle: srcSessionTitle, sessionTitleFromPrompt: srcSessionTitleFromPrompt, contextUsage: srcContextUsage, contextUsageOrigin: srcContextUsageOrigin, planProgress: srcPlanProgress, metadataUpdatedAt: srcMetadataUpdatedAt, assistantLastOutput: srcAssistantLastOutput, assistantLastOutputTruncated: srcAssistantLastOutputTruncated, lastToolName: srcToolName, transcriptPath: srcTranscriptPath, recentEvents, pidReachable, lastToolBoundaryAt: srcLastToolBoundaryAt, lastStopAt: srcLastStopAt, awaitingInputSinceStop: resolveAwaitingInputSinceStop(existing, event), muteNotificationSound: state === "notification" && muteNotificationSound === true, claudeBackgroundSubagentHoldAt };
+  const base = { sourcePid: srcPid, wtHwnd: srcWtHwnd, cwd: srcCwd, editor: srcEditor, pidChain: srcPidChain, tmuxSocket: srcTmuxSocket, tmuxClient: srcTmuxClient, orcaPaneKey: srcOrcaPaneKey, herdrPaneId: srcHerdr.herdrPaneId, herdrSocket: srcHerdr.herdrSocket, agentPid: srcAgentPid, agentId: srcAgentId, profileId: (existing && existing.profileId) || profileId || "local", rawSessionId: (existing && existing.rawSessionId) || rawSessionId || sessionId, sessionAutomationIdentity: srcSessionAutomationIdentity, host: srcHost, wslDistro: srcWslDistro, headless: srcHeadless, platform: srcPlatform, model: srcModel, provider: srcProvider, codexOriginator: srcCodexOriginator, codexSource: srcCodexSource, codexTurnId: srcCodexTurnId, dshCarrier: srcDshCarrier, ghosttyTerminalId: srcGhosttyTerminalId, sessionTitle: srcSessionTitle, sessionTitleFromPrompt: srcSessionTitleFromPrompt, contextUsage: srcContextUsage, contextUsageOrigin: srcContextUsageOrigin, planProgress: srcPlanProgress, metadataUpdatedAt: srcMetadataUpdatedAt, assistantLastOutput: srcAssistantLastOutput, assistantLastOutputTruncated: srcAssistantLastOutputTruncated, lastToolName: srcToolName, transcriptPath: srcTranscriptPath, recentEvents, pidReachable, lastToolBoundaryAt: srcLastToolBoundaryAt, lastStopAt: srcLastStopAt, awaitingInputSinceStop: resolveAwaitingInputSinceStop(existing, event), muteNotificationSound: state === "notification" && muteNotificationSound === true, claudeBackgroundSubagentHoldAt };
   // Desktop apps can reopen a previous conversation on launch, so SessionStart
   // only means "opened" — not "used". Any other lifecycle event is a real action
   // and clears the marker. Only the listed agents carry the field; others are

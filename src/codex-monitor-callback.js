@@ -1,6 +1,7 @@
 "use strict";
 
 const { normalizePlanProgress } = require("./codex-plan-progress");
+const { normalizeCodexTurnId } = require("./codex-turn-id");
 
 const { normalizeQuotaGroup } = require("../hooks/quota-bucket");
 const { CODEX_QUOTA_FIELDS } = require("../hooks/codex-rate-limits");
@@ -61,6 +62,7 @@ function buildCodexMonitorSessionOptions(extra, options = {}) {
   if (contextUsage) out.contextUsage = contextUsage;
   if (Object.prototype.hasOwnProperty.call(input, "planProgress")) {
     out.planProgress = normalizePlanProgress(input.planProgress);
+    out.planProgressTurnId = normalizeCodexTurnId(input.planProgressTurnId);
   }
   // Completion output is extracted by the JSONL monitor from the final
   // assistant message. Keep it on the lifecycle callback so the state store

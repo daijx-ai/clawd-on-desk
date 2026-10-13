@@ -898,6 +898,7 @@ class CodexLogMonitor {
       assistantLastOutputTruncated: false,
       contextUsage: null,
       planProgress: null,
+      planProgressTurnId: null,
       activeTurnId: null,
       turnBoundaryOpen: false,
       codexQuota: null,
@@ -1257,6 +1258,7 @@ class CodexLogMonitor {
         assistantLastOutputTruncated: retired ? retired.assistantLastOutputTruncated === true : false,
         contextUsage: retired ? retired.contextUsage || null : null,
         planProgress: retired ? retired.planProgress || null : null,
+        planProgressTurnId: retired ? retired.planProgressTurnId || null : null,
         activeTurnId: retired ? retired.activeTurnId || null : null,
         turnBoundaryOpen: retired ? retired.turnBoundaryOpen === true : false,
         codexQuota: retired ? retired.codexQuota || null : null,
@@ -1572,6 +1574,7 @@ class CodexLogMonitor {
       tracked.assistantLastOutputTruncated = false;
       tracked.contextUsage = null;
       tracked.planProgress = null;
+      tracked.planProgressTurnId = null;
       tracked.activeTurnId = null;
       tracked.turnBoundaryOpen = false;
       tracked.codexQuota = null;
@@ -1693,10 +1696,16 @@ class CodexLogMonitor {
 
     // A new turn invalidates the previous checklist. A terminal response does
     // not imply that every declared plan step completed.
-    if (isTurnStart) tracked.planProgress = null;
+    if (isTurnStart) {
+      tracked.planProgress = null;
+      tracked.planProgressTurnId = effectiveTurnId;
+    }
     if (key === "response_item:function_call") {
       const nextPlan = planProgressFromCall(payload);
-      if (nextPlan !== undefined) tracked.planProgress = nextPlan;
+      if (nextPlan !== undefined) {
+        tracked.planProgress = nextPlan;
+        tracked.planProgressTurnId = effectiveTurnId;
+      }
     }
 
     const assistantText = extractAssistantTextFromRecord(obj);
@@ -1981,6 +1990,7 @@ class CodexLogMonitor {
       assistantLastOutputTruncated: tracked.assistantLastOutputTruncated === true,
       contextUsage: tracked.contextUsage || null,
       planProgress: tracked.planProgress || null,
+      planProgressTurnId: tracked.planProgressTurnId || null,
       activeTurnId: tracked.activeTurnId || null,
       turnBoundaryOpen: tracked.turnBoundaryOpen === true,
       codexQuota: tracked.codexQuota || null,
@@ -2158,6 +2168,7 @@ class CodexLogMonitor {
       ...(extra || {}),
       ...(tracked.contextUsage ? { contextUsage: tracked.contextUsage } : {}),
       planProgress: tracked.planProgress || null,
+      planProgressTurnId: tracked.planProgressTurnId || null,
     };
   }
 

@@ -4137,7 +4137,7 @@ describe("updateSession()", () => {
   });
 
   it("stores valid Codex plan progress as metadata, clears it on a new turn, and rejects other agents", () => {
-    api.updateSession("codex:plan", "working", "PreToolUse", { agentId: "codex" });
+    api.updateSession("codex:plan", "working", "PreToolUse", { agentId: "codex", turnId: "A" });
     const session = api.sessions.get("codex:plan");
     session.updatedAt = 12345;
     const recentEventsBefore = JSON.stringify(session.recentEvents);
@@ -4145,6 +4145,7 @@ describe("updateSession()", () => {
     assert.equal(api.updateSessionMetadata("codex:plan", {
       expectedAgentId: "codex",
       planProgress: { completed: 1, total: 3 },
+      planProgressTurnId: "A",
     }), true);
     assert.deepStrictEqual(session.planProgress, { completed: 1, total: 3, percent: 33 });
     assert.equal(session.updatedAt, 12345);
@@ -4152,10 +4153,18 @@ describe("updateSession()", () => {
     assert.equal(api.updateSessionMetadata("codex:plan", {
       expectedAgentId: "claude-code",
       planProgress: { completed: 3, total: 3 },
+      planProgressTurnId: "A",
     }), false);
     assert.equal(session.planProgress.percent, 33);
 
-    api.updateSession("codex:plan", "thinking", "event_msg:task_started", { agentId: "codex" });
+    api.updateSession("codex:plan", "thinking", "event_msg:task_started", { agentId: "codex", turnId: "B" });
+    assert.equal(api.sessions.get("codex:plan").codexTurnId, "B");
+    assert.equal(api.sessions.get("codex:plan").planProgress, null);
+    api.updateSessionMetadata("codex:plan", {
+      expectedAgentId: "codex",
+      planProgress: { completed: 2, total: 3 },
+      planProgressTurnId: "A",
+    });
     assert.equal(api.sessions.get("codex:plan").planProgress, null);
 
     api.updateSession("claude:plan", "working", "PreToolUse", {
