@@ -2,6 +2,7 @@
 
 const path = require("path");
 const { resolveSessionIdentity } = require("./session-key");
+const { codexProfileIdentity, resolveCodexProfile } = require("./codex-profiles");
 const {
   assessSessionAutomationIdentity,
 } = require("./session-automation-identity");
@@ -319,6 +320,27 @@ function handleStatePost(req, res, options) {
       const trustedProfileId = remoteProfile && typeof remoteProfile.profileId === "string"
         ? remoteProfile.profileId
         : "local";
+      const shouldResolveLocalCodexProfile = agentId === "codex"
+        && trustedProfileId === "local"
+        && !remoteProfile
+        && !wslSourced
+        && !(typeof data.host === "string" && data.host.trim());
+      let codexProfile = null;
+      let localCodexProfileCount = 1;
+      if (shouldResolveLocalCodexProfile) {
+        const profiles = typeof ctx.getCodexProfiles === "function" ? ctx.getCodexProfiles() : [];
+        localCodexProfileCount = profiles.length || 1;
+        codexProfile = resolveCodexProfile(data.transcript_path, session_id, ctx.sessions, profiles);
+        if (!codexProfile || codexProfile === "ambiguous") {
+          recordRequestHookEvent.droppedUnsupported();
+          if (typeof ctx.debugLog === "function") {
+            ctx.debugLog("codex profile identity unresolved; dropping local state event");
+          }
+          res.writeHead(204, { [CLAWD_SERVER_HEADER]: CLAWD_SERVER_ID });
+          res.end();
+          return;
+        }
+      }
       const sessionAutomationIdentity = assessSessionAutomationIdentity({
         agentId,
         channel: "state",
@@ -371,7 +393,9 @@ function handleStatePost(req, res, options) {
       // as `default` so Kiro's cwd-scoped aliases and existing UI contracts do
       // not acquire the internal namespace.
       if (!session_id) session_id = `${agentId}:default`;
-      const sessionIdentity = resolveSessionIdentity(session_id, trustedProfileId, "default");
+      const sessionIdentity = codexProfile
+        ? codexProfileIdentity(session_id, codexProfile, "default")
+        : resolveSessionIdentity(session_id, trustedProfileId, "default");
       const rawStateSessionId = usesBuiltInDefaultStateBucket
         ? "default"
         : sessionIdentity.rawSessionId;
@@ -611,13 +635,17 @@ function handleStatePost(req, res, options) {
       const acceptedClaudeQuota = localClaudeStatuslineMetadataAllowed ? claudeQuota : null;
       if (typeof ctx.updateAccountQuota === "function"
         && (antigravityQuota || acceptedClaudeQuota || codexQuota || codexSparkQuota)) {
-        const quotaSource = trustedProfileId === "local" ? host : `remote:${trustedProfileId}`;
+        const quotaSource = codexProfile
+          ? codexProfile.quotaSource
+          : (trustedProfileId === "local" ? host : `remote:${trustedProfileId}`);
         ctx.updateAccountQuota(quotaSource, {
           antigravityQuota,
           claudeQuota: acceptedClaudeQuota,
           codexQuota,
           ...(codexSparkQuota ? { codexSparkQuota } : {}),
-          ...(trustedProfileId === "local" ? {} : { displayHost: host }),
+          ...(codexProfile && !codexProfile.isDefault
+            ? { displayHost: codexProfile.label }
+            : (trustedProfileId === "local" ? {} : { displayHost: host })),
         });
       }
       // Local Codex archive lifecycle (#655): once the local task's rollout is
@@ -635,6 +663,7 @@ function handleStatePost(req, res, options) {
         && ctx.shouldSuppressCodexArchive(sessionIdentity.rawSessionId, {
           agentId,
           profileId: trustedProfileId,
+          ...(codexProfile ? { codexProfileId: codexProfile.id } : {}),
           host,
           wslDistro,
         });
@@ -1125,6 +1154,12 @@ function handleStatePost(req, res, options) {
             ...(recapBoundary ? { recapBoundary } : {}),
             ...((recapIsSubagent || codexHookState.headless === true) ? { recapIsSubagent: true } : {}),
             profileId: sessionIdentity.profileId,
+            ...(codexProfile && (!codexProfile.isDefault || localCodexProfileCount > 1)
+              ? {
+                codexProfileId: codexProfile.id,
+                ...(!codexProfile.isDefault ? { codexProfileLabel: codexProfile.label } : {}),
+              }
+              : {}),
             rawSessionId: rawStateSessionId,
             host,
             wslDistro,

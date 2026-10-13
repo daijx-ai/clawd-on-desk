@@ -862,7 +862,10 @@ function buildQuotaSourceHeader(sourceEntry, providerEntry, baseLabel, providerK
   const parts = [];
   const multiSource = sourceEntry.multiSource === true;
   if (multiSource) {
-    parts.push(sourceEntry.host || t("dashboardQuotaSourceLocal"));
+    const localLabel = providerKey === "codexSparkQuota"
+      ? t("dashboardQuotaSectionCodexSpark")
+      : (providerKey === "codexQuota" ? t("dashboardQuotaSectionCodex") : t("dashboardQuotaSourceLocal"));
+    parts.push(sourceEntry.host || localLabel);
   }
   if (baseLabel) parts.push(baseLabel);
   // lastSeenAt (last confirmation), not updatedAt (last value change): a
@@ -1144,6 +1147,7 @@ function beginTitleEdit(session) {
     sessionId: session.id,
     rawSessionId: session.rawSessionId || session.id,
     profileId: session.profileId || "local",
+    codexProfileId: session.codexProfileId || null,
     agentId: session.agentId || null,
     host: session.host || null,
     cwd: session.cwd || "",
@@ -1176,6 +1180,7 @@ async function commitTitleEdit() {
       sessionId: edit.sessionId,
       rawSessionId: edit.rawSessionId,
       profileId: edit.profileId,
+      codexProfileId: edit.codexProfileId,
       cwd: edit.cwd,
       alias: edit.draft,
     });
@@ -1248,6 +1253,13 @@ function appendMeta(main, session, now) {
   badge.appendChild(document.createTextNode(badgeLabel(session.badge)));
 
   meta.appendChild(document.createTextNode(agentLabel(session.agentId, session.agentName)));
+  if (session.codexProfileLabel) {
+    meta.appendChild(document.createTextNode(" · "));
+    const profileBadge = document.createElement("span");
+    profileBadge.className = "source-badge codex-profile-badge";
+    profileBadge.textContent = session.codexProfileLabel;
+    meta.appendChild(profileBadge);
+  }
   meta.appendChild(document.createTextNode(" · "));
   meta.appendChild(badge);
   meta.appendChild(document.createTextNode(` · ${formatElapsed(now - session.updatedAt)}`));

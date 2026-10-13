@@ -43,6 +43,7 @@ const {
   isValidOpencodeFamilyBridgeToken,
 } = require("./opencode-family-bridge-url");
 const { resolveSessionIdentity } = require("./session-key");
+const { codexProfileIdentity, resolveCodexProfile } = require("./codex-profiles");
 const {
   assessSessionAutomationIdentity,
 } = require("./session-automation-identity");
@@ -734,6 +735,24 @@ function handlePermissionPost(req, res, options) {
     // A WSL hook reports Linux PIDs that can alias live processes on this
     // Windows host, so they are stripped exactly like Remote SSH metadata.
     const wslSourced = isWslSourced({ wslDistro: data.wsl_distro, host: data.host });
+    const shouldResolveLocalCodexProfile = agentId === "codex"
+      && trustedProfileId === "local"
+      && !remoteProfile
+      && !wslSourced
+      && !normalizeString(data.host);
+    let codexProfile = null;
+    let localCodexProfileCount = 1;
+    if (shouldResolveLocalCodexProfile) {
+      const profiles = typeof ctx.getCodexProfiles === "function" ? ctx.getCodexProfiles() : [];
+      localCodexProfileCount = profiles.length || 1;
+      codexProfile = resolveCodexProfile(data.transcript_path, data.session_id, ctx.sessions, profiles);
+      if (!codexProfile || codexProfile === "ambiguous") {
+        recordRequestHookEvent.droppedUnsupported();
+        ctx.permLog("codex profile identity unresolved -> native prompt fallback");
+        sendCodexPermissionNoDecision(res);
+        return;
+      }
+    }
     // Intentional exception to the WSL PID strip: per-session automation
     // eligibility only strips Remote SSH, never WSL, to preserve the pre-fix
     // user-visible automation. Its trust therefore ends on session timeout,
@@ -755,14 +774,21 @@ function handlePermissionPost(req, res, options) {
       codexSource: data.codex_source,
       agentPid: automationAgentPid,
     });
-    const resolvePermissionSession = (value, fallback) =>
-      resolveSessionIdentity(value, trustedProfileId, fallback);
+    const resolvePermissionSession = (value, fallback) => codexProfile
+      ? codexProfileIdentity(value, codexProfile, fallback)
+      : resolveSessionIdentity(value, trustedProfileId, fallback);
     // The route owns this identity: callers cannot choose the profile, and the
     // raw id must survive canonical Map-key normalization on both local and
     // remote requests. The display host remains remote-only.
     const trustedSessionFields = (sessionIdentity) => ({
       profileId: sessionIdentity.profileId,
       rawSessionId: sessionIdentity.rawSessionId,
+      ...(codexProfile && (!codexProfile.isDefault || localCodexProfileCount > 1)
+        ? {
+          codexProfileId: codexProfile.id,
+          ...(!codexProfile.isDefault ? { codexProfileLabel: codexProfile.label } : {}),
+        }
+        : {}),
       ...(trustedProfileId !== "local" && trustedDisplayHost ? { host: trustedDisplayHost } : {}),
     });
 
@@ -1140,6 +1166,7 @@ function handlePermissionPost(req, res, options) {
           && ctx.shouldSuppressCodexArchive(sessionIdentity.rawSessionId, {
             agentId: "codex",
             profileId: trustedProfileId,
+            ...(codexProfile ? { codexProfileId: codexProfile.id } : {}),
             host: trustedDisplayHost || normalizeString(data.host),
             wslDistro: normalizeString(data.wsl_distro),
           })) {

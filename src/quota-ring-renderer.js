@@ -276,8 +276,11 @@ function buildCoinModel(source, def, now, multiSource) {
   const state = allReset ? "reset" : (stale ? "stale" : "live");
   const near = state === "live" && binding && binding.pct > HOT_AT;
 
+  const localSourceLabel = def.key === "codexSparkQuota"
+    ? t("dashboardQuotaSectionCodexSpark")
+    : (def.key === "codexQuota" ? t("dashboardQuotaSectionCodex") : t("dashboardQuotaSourceLocal"));
   const visibleHost = multiSource
-    ? (source.host || t("dashboardQuotaSourceLocal"))
+    ? (source.host || localSourceLabel)
     : null;
   return {
     providerKey: def.key,

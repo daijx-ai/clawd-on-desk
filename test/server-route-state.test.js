@@ -23,6 +23,7 @@ const { classifyPermissionInteraction } = require("../src/permission-automation-
 const { buildStateBody } = require("../hooks/clawd-hook");
 const { createMemoryRecapSink } = require("../src/recap-sink");
 const { makeSessionKey } = require("../src/session-key");
+const { codexProfileIdentity, normalizeCodexProfileConfig } = require("../src/codex-profiles");
 const createAgentRuntimeMain = require("../src/agent-runtime-main");
 const { createDshStateSequenceFence } = require("../src/dsh-state-sequence");
 const initState = require("../src/state");
@@ -239,6 +240,45 @@ describe("server-route-state Codex ambient-suggestion marker", () => {
 });
 
 describe("server-route-state POST", () => {
+  it("routes local Codex hooks by transcript home and fails closed when profile ownership is ambiguous", async () => {
+    const profiles = normalizeCodexProfileConfig({
+      profiles: [{ id: "company", label: "Company", home: "/profiles/company-codex" }],
+    }, { home: "/profiles", env: {} });
+    const rawSessionId = "codex:shared-state-id";
+    const base = {
+      agent_id: "codex",
+      session_id: rawSessionId,
+      hook_source: "codex-official",
+      event: "UserPromptSubmit",
+      state: "thinking",
+      transcript_path: "/profiles/company-codex/sessions/rollout.jsonl",
+    };
+    const personal = await callStatePost(JSON.stringify({
+      ...base,
+      transcript_path: "/profiles/.codex/sessions/rollout.jsonl",
+    }), { ctx: { getCodexProfiles: () => profiles } });
+    assert.equal(personal.statusCode, 200);
+    assert.equal(personal.calls.updateSession[0][0], localSessionKey(rawSessionId));
+    assert.equal(personal.calls.updateSession[0][3].codexProfileId, "default");
+
+    const company = await callStatePost(JSON.stringify(base), {
+      ctx: { getCodexProfiles: () => profiles },
+    });
+    assert.equal(company.statusCode, 200, company.body);
+    const companyIdentity = codexProfileIdentity(rawSessionId, profiles[1]);
+    assert.equal(company.calls.updateSession[0][0], companyIdentity.sessionId);
+    assert.equal(company.calls.updateSession[0][3].codexProfileId, "company");
+    assert.equal(company.calls.updateSession[0][3].codexProfileLabel, "Company");
+    assert.equal(company.calls.updateSession[0][3].rawSessionId, rawSessionId);
+
+    const ambiguous = await callStatePost(JSON.stringify({ ...base, transcript_path: undefined }), {
+      ctx: { getCodexProfiles: () => profiles },
+    });
+    assert.equal(ambiguous.statusCode, 204);
+    assert.equal(ambiguous.calls.updateSession.length, 0);
+    assert.ok(ambiguous.calls.recorder.some((entry) => entry.outcome === "unsupported"));
+  });
+
   it("rejects a parsed old-turn compaction after HTTP hooks start a newer Codex turn", async () => {
     const CodexLogMonitor = require("../agents/codex-log-monitor");
     const codexConfig = require("../agents/codex");

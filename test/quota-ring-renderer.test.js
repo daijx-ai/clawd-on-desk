@@ -83,6 +83,8 @@ function loadRenderer() {
         dashboardQuotaGroupGemini: "Gemini",
         dashboardQuotaGroupThirdParty: "Claude/GPT",
         dashboardQuotaSourceLocal: "Local",
+        dashboardQuotaSectionCodex: "Codex",
+        dashboardQuotaSectionCodexSpark: "Codex Spark",
         quotaRingReset: "reset",
         quotaRingRemainingWord: "remaining",
         dashboardQuotaResetIn: "resets in {time}",
@@ -297,6 +299,27 @@ describe("quota ring renderer model", () => {
     assert.strictEqual(model.displayWindow.field, "codexWeekly");
     assert.strictEqual(readout.children[0].textContent, "12%");
     assert.strictEqual(readout.children[1].textContent, "7d");
+  });
+
+  it("labels the default Codex quota separately from local profiles", () => {
+    const context = loadRenderer();
+    const now = 1_000_000;
+    const source = {
+      sourceKey: null,
+      host: null,
+      codexQuota: {
+        group: { codexWeekly: { usedPercent: 12, resetAt: now + 3_600_000, windowMinutes: 10080 } },
+        lastSeenAt: now,
+      },
+    };
+    const model = modelFor(context, source, 2, now, true);
+    assert.equal(model.host, "Codex");
+    const company = modelFor(context, {
+      sourceKey: "codex-profile:company",
+      host: "Company",
+      codexQuota: source.codexQuota,
+    }, 2, now, true);
+    assert.equal(company.host, "Company");
   });
 
   it("uses a fresh weekly readout instead of presenting a stale short window as live", () => {

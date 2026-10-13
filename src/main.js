@@ -188,6 +188,7 @@ const { startMobilePreviewServerSafely } = require("./network/mobile-preview-lif
 const createThemeFadeSequencer = require("./theme-fade-sequencer");
 const createThemeRuntime = require("./theme-runtime");
 const createAgentRuntimeMain = require("./agent-runtime-main");
+const { loadCodexProfiles } = require("./codex-profiles");
 const createFloatingWindowRuntime = require("./floating-window-runtime");
 const createPetWindowRuntime = require("./pet-window-runtime");
 const { collectRequiredAssetFiles } = require("./theme-schema");
@@ -2969,6 +2970,7 @@ getSessionHudWindow = _sessionHud.getWindow;
 getQuotaRingWindow = _sessionHud.getQuotaRingWindow;
 
 agentRuntime = createAgentRuntimeMain({
+  codexProfiles: loadCodexProfiles({ logWarn: (message) => sessionLog(message) }),
   getServer: () => _server,
   getStateRuntime: () => _state,
   getPermissionRuntime: () => _perm,
@@ -2998,6 +3000,9 @@ const _serverCtx = {
   get PASSTHROUGH_TOOLS() { return PASSTHROUGH_TOOLS; },
   get STATE_SVGS() { return _state.STATE_SVGS; },
   get sessions() { return sessions; },
+  getCodexProfiles: () => agentRuntime && typeof agentRuntime.getCodexProfiles === "function"
+    ? agentRuntime.getCodexProfiles()
+    : [],
   getCustomAgentIds: () => (_settingsController.get("customApplications") || [])
     .map((application) => application && application.id)
     .filter(Boolean),

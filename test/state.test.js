@@ -2960,6 +2960,35 @@ describe("updateSession()", () => {
     assert.strictEqual(api.sessions.get("c1").pidReachable, true);
   });
 
+  it("stores and preserves labels for additional local Codex profiles only", () => {
+    api.updateSession("company-session", "working", "UserPromptSubmit", {
+      agentId: "codex",
+      profileId: "local",
+      rawSessionId: "codex:shared",
+      codexProfileId: "company",
+      codexProfileLabel: "Company",
+    });
+    const company = api.sessions.get("company-session");
+    assert.equal(company.codexProfileId, "company");
+    assert.equal(company.codexProfileLabel, "Company");
+
+    api.updateSession("company-session", "working", "PreToolUse", {
+      agentId: "codex",
+      profileId: "local",
+      rawSessionId: "codex:shared",
+    });
+    assert.equal(company.codexProfileId, "company");
+    assert.equal(company.codexProfileLabel, "Company");
+
+    api.updateSession("claude-session", "working", "PreToolUse", {
+      agentId: "claude-code",
+      profileId: "local",
+      codexProfileId: "company",
+      codexProfileLabel: "Company",
+    });
+    assert.equal(api.sessions.get("claude-session").codexProfileId, undefined);
+  });
+
   it("attention is oneshot — stored as idle in session", () => {
     update(api, { id: "s1", state: "working" });
     mock.timers.tick(1000); // past MIN_DISPLAY_MS.working

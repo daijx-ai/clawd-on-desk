@@ -10,6 +10,7 @@ const createAgentRuntimeMain = require("../src/agent-runtime-main");
 const CodexSubagentClassifier = require("../agents/codex-subagent-classifier");
 const { resolveCodexOfficialHookState } = require("../src/server-codex-official-turns");
 const { makeSessionKey } = require("../src/session-key");
+const { codexProfileIdentity, normalizeCodexProfileConfig } = require("../src/codex-profiles");
 const { digestCodexTurnId } = require("../src/codex-turn-id");
 const { CODEX_LOCAL_WORKING_STALE_FLOOR_MS } = require("../src/state-stale-cleanup");
 const {
@@ -213,6 +214,130 @@ describe("agent-runtime-main", () => {
     assert.ok(!mainSource.includes("CODEX_LOG_EVENTS_COVERED_BY_OFFICIAL_HOOKS"));
     assert.ok(!mainSource.includes("function _deferredStartMonitorForAgent"));
     assert.ok(!mainSource.includes("function _deferredDismissPermissionsByAgent"));
+  });
+
+  it("monitors configured local Codex profiles with isolated session keys and quota sources", () => {
+    const instances = [];
+    const quotas = [];
+    const FakeMonitor = makeFakeMonitorClass(instances);
+    const harness = makeRealStateHarness();
+    const classifierSessionIds = [];
+    const codexProfiles = normalizeCodexProfileConfig({
+      profiles: [{ id: "company", label: "Company", home: "/profiles/company-codex" }],
+    }, { home: "/profiles", env: {} });
+    const runtime = createAgentRuntimeMain({
+      codexProfiles,
+      loadCodexLogMonitor: () => FakeMonitor,
+      loadCodexAgent: () => ({ id: "codex", logConfig: { sessionDir: "~/.codex/sessions" } }),
+      codexSubagentClassifier: {
+        registerSession: (sessionId) => { classifierSessionIds.push(sessionId); return "unknown"; },
+        classify: () => "unknown",
+        clear: () => {},
+      },
+      isAgentEnabled: () => true,
+      getStateRuntime: () => harness.state,
+      updateSession: (...args) => harness.state.updateSession(...args),
+      clearCodexNotifyBubbles: () => {},
+    });
+    try {
+      runtime.startCodexLogMonitor();
+      assert.equal(instances.length, 2);
+      assert.equal(instances[0].agent.logConfig.sessionDir, "~/.codex/sessions");
+      assert.equal(instances[1].agent.logConfig.sessionDir, "/profiles/company-codex/sessions");
+      assert.equal(instances[1].options.codexDir, "/profiles/company-codex");
+
+      const rawSessionId = "codex:shared-session-id";
+      const companyKey = codexProfileIdentity(rawSessionId, codexProfiles[1]).sessionId;
+      instances[1].options.classifier.registerSession(rawSessionId, {});
+      assert.equal(classifierSessionIds[0], companyKey);
+      instances[0].emit(rawSessionId, "thinking", "event_msg:task_started", { turnId: "turn-a" });
+      instances[1].emit(rawSessionId, "thinking", "event_msg:task_started", { turnId: "turn-b" });
+      const personalKey = localSessionKey(rawSessionId);
+      assert.notEqual(personalKey, companyKey);
+      assert.equal(harness.state.sessions.get(personalKey).codexProfileId, undefined);
+      assert.equal(harness.state.sessions.get(companyKey).codexProfileId, "company");
+      assert.equal(harness.state.sessions.get(companyKey).codexProfileLabel, "Company");
+
+      instances[0].emit(rawSessionId, "thinking", "event_msg:token_count", {
+        codexQuota: { codexWeekly: { usedPercent: 10, resetAt: Date.now() + 3600000 } },
+      });
+      instances[1].emit(rawSessionId, "thinking", "event_msg:token_count", {
+        codexQuota: { codexWeekly: { usedPercent: 80, resetAt: Date.now() + 3600000 } },
+      });
+      quotas.push(...harness.state.getAccountQuotaSnapshot());
+      assert.equal(quotas.length, 2);
+      assert.equal(quotas.find((entry) => entry.sourceKey === "").codexQuota.group.codexWeekly.usedPercent, 10);
+      assert.equal(quotas.find((entry) => entry.sourceKey === "codex-profile:company").codexQuota.group.codexWeekly.usedPercent, 80);
+      assert.equal(quotas.find((entry) => entry.sourceKey === "codex-profile:company").host, "Company");
+    } finally {
+      runtime.cleanup();
+      harness.state.cleanup();
+    }
+  });
+
+  it("retires archived sessions only from the owning local Codex profile", () => {
+    const instances = [];
+    const archiveTrackers = [];
+    const FakeMonitor = makeFakeMonitorClass(instances);
+    const harness = makeRealStateHarness();
+    const codexProfiles = normalizeCodexProfileConfig({
+      profiles: [{ id: "company", label: "Company", home: "/profiles/company-codex" }],
+    }, { home: "/profiles", env: {} });
+    const runtime = createAgentRuntimeMain({
+      codexProfiles,
+      loadCodexLogMonitor: () => FakeMonitor,
+      loadCodexAgent: () => ({ id: "codex" }),
+      loadCodexArchiveTracker: () => (options) => {
+        const tracker = {
+          ...options,
+          start() {},
+          stop() {},
+          isArchived: () => false,
+          confirm: (rawSessionId) => options.onArchiveConfirmed(rawSessionId),
+        };
+        archiveTrackers.push(tracker);
+        return tracker;
+      },
+      codexSubagentClassifier: {},
+      isAgentEnabled: () => true,
+      getStateRuntime: () => harness.state,
+      updateSession: (...args) => harness.state.updateSession(...args),
+    });
+    try {
+      runtime.startCodexLogMonitor();
+      const rawSessionId = "codex:shared-archive-id";
+      const personalKey = localSessionKey(rawSessionId);
+      const companyIdentity = codexProfileIdentity(rawSessionId, codexProfiles[1]);
+      const update = (sessionId, profile) => runtime.updateSessionFromServer(
+        sessionId,
+        "working",
+        "UserPromptSubmit",
+        {
+          agentId: "codex",
+          hookSource: "codex-official",
+          profileId: "local",
+          rawSessionId,
+          transcriptPath: profile.id === "default"
+            ? "/profiles/.codex/sessions/personal.jsonl"
+            : "/profiles/company-codex/sessions/company.jsonl",
+          ...(profile.id === "default"
+            ? {}
+            : { codexProfileId: profile.id, codexProfileLabel: profile.label }),
+        }
+      );
+      update(personalKey, codexProfiles[0]);
+      update(companyIdentity.sessionId, codexProfiles[1]);
+      assert.ok(harness.state.sessions.has(personalKey));
+      assert.ok(harness.state.sessions.has(companyIdentity.sessionId));
+
+      const companyTracker = archiveTrackers.find((tracker) => tracker.codexHome === codexProfiles[1].home);
+      companyTracker.confirm("shared-archive-id");
+      assert.ok(harness.state.sessions.has(personalKey));
+      assert.equal(harness.state.sessions.has(companyIdentity.sessionId), false);
+    } finally {
+      runtime.cleanup();
+      harness.state.cleanup();
+    }
   });
 
   it("marks official Codex sessions and suppresses covered JSONL events until the TTL expires", () => {

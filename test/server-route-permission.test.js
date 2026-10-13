@@ -27,6 +27,7 @@ const {
   isValidInteraction,
 } = require("../src/permission-automation-policy");
 const { makeSessionKey } = require("../src/session-key");
+const { codexProfileIdentity, normalizeCodexProfileConfig } = require("../src/codex-profiles");
 
 function localSessionKey(rawSessionId) {
   return makeSessionKey({ profileId: "local", rawSessionId });
@@ -2860,6 +2861,47 @@ describe("server-route-permission Windows B1a Codex metadata", () => {
     });
     assert.strictEqual(mismatchCalls, 0);
     assert.strictEqual(mismatch.ctx.pendingPermissions[0].sourcePid, 11);
+  });
+});
+
+describe("server-route-permission local Codex profile routing", () => {
+  it("keeps Company permission state on the profile key and returns no-decision for ambiguous hooks", async () => {
+    const profiles = normalizeCodexProfileConfig({
+      profiles: [{ id: "company", label: "Company", home: "/profiles/company-codex" }],
+    }, { home: "/profiles", env: {} });
+    const rawSessionId = "codex:shared-permission-id";
+    const base = {
+      agent_id: "codex",
+      hook_source: "codex-official",
+      hook_event_name: "PermissionRequest",
+      session_id: rawSessionId,
+      transcript_path: "/profiles/company-codex/sessions/rollout.jsonl",
+      tool_name: "Bash",
+      tool_input: { command: "npm test" },
+    };
+    const personal = await callPermissionPost(JSON.stringify({
+      ...base,
+      transcript_path: "/profiles/.codex/sessions/personal.jsonl",
+    }), { ctx: { getCodexProfiles: () => profiles } });
+    assert.equal(personal.ctx.calls.updateSession[0][0], localSessionKey(rawSessionId));
+    assert.equal(personal.ctx.calls.updateSession[0][3].codexProfileId, "default");
+
+    const company = await callPermissionPost(JSON.stringify(base), {
+      ctx: { getCodexProfiles: () => profiles },
+    });
+    const companyId = codexProfileIdentity(rawSessionId, profiles[1]).sessionId;
+    assert.equal(company.ctx.calls.updateSession[0][0], companyId);
+    assert.equal(company.ctx.calls.updateSession[0][3].codexProfileId, "company");
+    assert.equal(company.ctx.calls.updateSession[0][3].codexProfileLabel, "Company");
+    assert.equal(company.ctx.pendingPermissions[0].sessionId, companyId);
+
+    const ambiguous = await callPermissionPost(JSON.stringify({ ...base, transcript_path: undefined }), {
+      ctx: { getCodexProfiles: () => profiles },
+    });
+    assert.equal(ambiguous.statusCode, 204);
+    assert.equal(ambiguous.ctx.calls.updateSession.length, 0);
+    assert.equal(ambiguous.ctx.pendingPermissions.length, 0);
+    assert.equal(ambiguous.ctx.calls.sendPermissionResponse.length, 0);
   });
 });
 

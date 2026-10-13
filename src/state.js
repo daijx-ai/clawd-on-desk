@@ -49,6 +49,7 @@ const { getClaudeStopDisposition } = require("../hooks/claude-stop-disposition")
 const { createClaudeToolPhaseLedger } = require("./claude-tool-phase");
 const { getStartupRecoveryProcessNames } = require("../agents/registry");
 const { normalizeCodexTurnId } = require("./codex-turn-id");
+const { DEFAULT_CODEX_PROFILE_ID, normalizeProfileLabel } = require("./codex-profiles");
 const { TERMINAL_EVENTS: CODEX_TERMINAL_EVENTS } = require("./codex-turn-fence");
 const { hasReusableDefaultIdentity, mapRecapMetrics } = require("./recap-metrics");
 const {
@@ -67,6 +68,7 @@ const recapSink = ctx.recapSink && typeof ctx.recapSink.record === "function"
   : NOOP_RECAP_SINK;
 const pendingClaudeRecapStarts = new Map();
 const MAX_PENDING_CLAUDE_RECAP_STARTS = 256;
+const CODEX_PROFILE_ID_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 
 const _getCursor = ctx.getCursorScreenPoint || (screen ? () => screen.getCursorScreenPoint() : null);
 const _kill = ctx.processKill || process.kill.bind(process);
@@ -77,6 +79,23 @@ function normalizeGhosttyTerminalId(value) {
   if (!text || text.length > 160) return null;
   if (/^(error|unsupported|missing|miss)([-:]|$)/i.test(text)) return null;
   return text;
+}
+
+function normalizeLocalCodexProfileFields(input = {}, existing = null) {
+  if (input.agentId !== "codex" || (input.profileId || "local") !== "local"
+    || input.host || input.wslDistro) return {};
+  const candidateId = typeof input.codexProfileId === "string" ? input.codexProfileId.trim() : "";
+  const existingId = existing && typeof existing.codexProfileId === "string"
+    ? existing.codexProfileId
+    : "";
+  const profileId = CODEX_PROFILE_ID_RE.test(candidateId)
+    ? candidateId
+    : (CODEX_PROFILE_ID_RE.test(existingId) ? existingId : DEFAULT_CODEX_PROFILE_ID);
+  if (profileId === DEFAULT_CODEX_PROFILE_ID) return {};
+  const profileLabel = normalizeProfileLabel(input.codexProfileLabel)
+    || normalizeProfileLabel(existing && existing.codexProfileLabel)
+    || profileId;
+  return { codexProfileId: profileId, codexProfileLabel: profileLabel };
 }
 
 function normalizePositiveInteger(value) {
@@ -2310,6 +2329,8 @@ function updateSession(sessionId, state, event, opts = {}) {
     provider = null,
     codexOriginator = null,
     codexSource = null,
+    codexProfileId = null,
+    codexProfileLabel = null,
     dshCarrier = null,
     ghosttyTerminalId = null,
     displayHint = undefined,
@@ -2482,6 +2503,14 @@ function updateSession(sessionId, state, event, opts = {}) {
       const srcProvider = provider || (existing && existing.provider) || null;
       const srcCodexOriginator = codexOriginator || (existing && existing.codexOriginator) || null;
       const srcCodexSource = codexSource || (existing && existing.codexSource) || null;
+      const srcCodexProfile = normalizeLocalCodexProfileFields({
+        agentId: srcAgentId,
+        profileId: (existing && existing.profileId) || profileId,
+        host: srcHost,
+        wslDistro: srcWslDistro,
+        codexProfileId,
+        codexProfileLabel,
+      }, existing);
       const srcGhosttyTerminalId = normalizeGhosttyTerminalId(ghosttyTerminalId) || (existing && existing.ghosttyTerminalId) || null;
       const {
         title: srcSessionTitle,
@@ -2532,6 +2561,7 @@ function updateSession(sessionId, state, event, opts = {}) {
         provider: srcProvider,
         codexOriginator: srcCodexOriginator,
         codexSource: srcCodexSource,
+        ...srcCodexProfile,
         ghosttyTerminalId: srcGhosttyTerminalId,
         sessionTitle: srcSessionTitle,
         sessionTitleFromPrompt: srcSessionTitleFromPrompt,
@@ -2634,6 +2664,14 @@ function updateSession(sessionId, state, event, opts = {}) {
   const srcProvider = provider || (existing && existing.provider) || null;
   const srcCodexOriginator = codexOriginator || (existing && existing.codexOriginator) || null;
   const srcCodexSource = codexSource || (existing && existing.codexSource) || null;
+  const srcCodexProfile = normalizeLocalCodexProfileFields({
+    agentId: srcAgentId,
+    profileId: (existing && existing.profileId) || profileId,
+    host: srcHost,
+    wslDistro: srcWslDistro,
+    codexProfileId,
+    codexProfileLabel,
+  }, existing);
   // Deliberately NOT sticky like codexOriginator: each lifecycle event states
   // its own carrier, so a missing value clears it. A DSH session can be
   // reopened in the other carrier (or a stale field can appear without one),
@@ -2953,7 +2991,7 @@ function updateSession(sessionId, state, event, opts = {}) {
     clearSubagentTracker(subagentTracker);
   }
 
-  const base = { sourcePid: srcPid, wtHwnd: srcWtHwnd, cwd: srcCwd, editor: srcEditor, pidChain: srcPidChain, tmuxSocket: srcTmuxSocket, tmuxClient: srcTmuxClient, orcaPaneKey: srcOrcaPaneKey, herdrPaneId: srcHerdr.herdrPaneId, herdrSocket: srcHerdr.herdrSocket, agentPid: srcAgentPid, agentId: srcAgentId, profileId: (existing && existing.profileId) || profileId || "local", rawSessionId: (existing && existing.rawSessionId) || rawSessionId || sessionId, sessionAutomationIdentity: srcSessionAutomationIdentity, host: srcHost, wslDistro: srcWslDistro, headless: srcHeadless, platform: srcPlatform, model: srcModel, provider: srcProvider, codexOriginator: srcCodexOriginator, codexSource: srcCodexSource, dshCarrier: srcDshCarrier, ghosttyTerminalId: srcGhosttyTerminalId, sessionTitle: srcSessionTitle, sessionTitleFromPrompt: srcSessionTitleFromPrompt, contextUsage: srcContextUsage, contextUsageOrigin: srcContextUsageOrigin, metadataUpdatedAt: srcMetadataUpdatedAt, assistantLastOutput: srcAssistantLastOutput, assistantLastOutputTruncated: srcAssistantLastOutputTruncated, lastToolName: srcToolName, transcriptPath: srcTranscriptPath, recentEvents, pidReachable, lastToolBoundaryAt: srcLastToolBoundaryAt, lastStopAt: srcLastStopAt, awaitingInputSinceStop: resolveAwaitingInputSinceStop(existing, event), muteNotificationSound: state === "notification" && muteNotificationSound === true, claudeBackgroundSubagentHoldAt };
+  const base = { sourcePid: srcPid, wtHwnd: srcWtHwnd, cwd: srcCwd, editor: srcEditor, pidChain: srcPidChain, tmuxSocket: srcTmuxSocket, tmuxClient: srcTmuxClient, orcaPaneKey: srcOrcaPaneKey, herdrPaneId: srcHerdr.herdrPaneId, herdrSocket: srcHerdr.herdrSocket, agentPid: srcAgentPid, agentId: srcAgentId, profileId: (existing && existing.profileId) || profileId || "local", rawSessionId: (existing && existing.rawSessionId) || rawSessionId || sessionId, sessionAutomationIdentity: srcSessionAutomationIdentity, host: srcHost, wslDistro: srcWslDistro, headless: srcHeadless, platform: srcPlatform, model: srcModel, provider: srcProvider, codexOriginator: srcCodexOriginator, codexSource: srcCodexSource, ...srcCodexProfile, dshCarrier: srcDshCarrier, ghosttyTerminalId: srcGhosttyTerminalId, sessionTitle: srcSessionTitle, sessionTitleFromPrompt: srcSessionTitleFromPrompt, contextUsage: srcContextUsage, contextUsageOrigin: srcContextUsageOrigin, metadataUpdatedAt: srcMetadataUpdatedAt, assistantLastOutput: srcAssistantLastOutput, assistantLastOutputTruncated: srcAssistantLastOutputTruncated, lastToolName: srcToolName, transcriptPath: srcTranscriptPath, recentEvents, pidReachable, lastToolBoundaryAt: srcLastToolBoundaryAt, lastStopAt: srcLastStopAt, awaitingInputSinceStop: resolveAwaitingInputSinceStop(existing, event), muteNotificationSound: state === "notification" && muteNotificationSound === true, claudeBackgroundSubagentHoldAt };
   // Desktop apps can reopen a previous conversation on launch, so SessionStart
   // only means "opened" — not "used". Any other lifecycle event is a real action
   // and clears the marker. Only the listed agents carry the field; others are

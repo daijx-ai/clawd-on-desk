@@ -1,12 +1,19 @@
 "use strict";
 
 const DefaultCodexSubagentClassifier = require("../agents/codex-subagent-classifier");
+const path = require("path");
 const {
   buildCodexMonitorSessionOptions,
   normalizeCodexMonitorAccountQuotas,
   isCodexMonitorMetadataOnlyEvent,
 } = require("./codex-monitor-callback");
 const { resolveSessionIdentity } = require("./session-key");
+const {
+  DEFAULT_CODEX_PROFILE_ID,
+  codexProfileIdentity,
+  normalizeCodexProfileConfig,
+  resolveCodexProfile,
+} = require("./codex-profiles");
 const { bareCodexSessionId } = require("../hooks/codex-session-index");
 const {
   CODEX_INTERNAL_THREAD_AMBIENT_SUGGESTIONS,
@@ -78,10 +85,126 @@ function createProfileScopedClassifier(classifier, profileId) {
   };
 }
 
+function createCodexProfileScopedClassifier(classifier, profile) {
+  const canonicalSessionId = (sessionId) => codexProfileIdentity(sessionId, profile).sessionId;
+  return {
+    registerSession(sessionId, input) {
+      return classifier && typeof classifier.registerSession === "function"
+        ? classifier.registerSession(canonicalSessionId(sessionId), input)
+        : "unknown";
+    },
+    classify(sessionId) {
+      return classifier && typeof classifier.classify === "function"
+        ? classifier.classify(canonicalSessionId(sessionId))
+        : "unknown";
+    },
+    clear(sessionId) {
+      if (classifier && typeof classifier.clear === "function") {
+        classifier.clear(canonicalSessionId(sessionId));
+      }
+    },
+  };
+}
+
 function createAgentRuntimeMain(options = {}) {
   const now = typeof options.now === "function" ? options.now : Date.now;
   const logWarn = typeof options.logWarn === "function" ? options.logWarn : console.warn;
   const debugLog = typeof options.debugLog === "function" ? options.debugLog : () => {};
+  const codexProfiles = Array.isArray(options.codexProfiles) && options.codexProfiles.length
+    ? options.codexProfiles
+    : normalizeCodexProfileConfig(null);
+  const codexProfilesById = new Map(codexProfiles.map((profile) => [profile.id, profile]));
+  const defaultCodexProfile = codexProfilesById.get(DEFAULT_CODEX_PROFILE_ID) || codexProfiles[0];
+
+  function resolveLocalCodexProfileForSession(sessionId, opts = {}) {
+    if (typeof opts.codexProfileId === "string") {
+      const explicitProfile = codexProfilesById.get(opts.codexProfileId);
+      if (explicitProfile) return explicitProfile;
+    }
+    const state = getStateRuntime();
+    return resolveCodexProfile(
+      opts.transcriptPath,
+      opts.rawSessionId || sessionId,
+      state && state.sessions,
+      codexProfiles
+    );
+  }
+
+  function getCodexProfileSessionFields(profile) {
+    if (!profile || profile.id === DEFAULT_CODEX_PROFILE_ID) return {};
+    return {
+      codexProfileId: profile.id,
+      codexProfileLabel: profile.label,
+    };
+  }
+
+  function scopeLocalCodexSession(sessionId, opts = {}) {
+    if (!opts || opts.agentId !== "codex" || (opts.profileId || "local") !== "local"
+      || opts.host || opts.wslDistro) return { accepted: true, sessionId, opts };
+    const state = getStateRuntime();
+    const existing = state && state.sessions && typeof state.sessions.get === "function"
+      ? state.sessions.get(sessionId)
+      : null;
+    const existingProfile = existing && codexProfilesById.get(
+      existing.codexProfileId || DEFAULT_CODEX_PROFILE_ID
+    );
+    const rawFromOptions = typeof opts.rawSessionId === "string" && opts.rawSessionId.trim()
+      ? opts.rawSessionId.trim()
+      : null;
+    const explicitProfile = typeof opts.codexProfileId === "string"
+      ? codexProfilesById.get(opts.codexProfileId)
+      : null;
+    if (explicitProfile && explicitProfile.id === DEFAULT_CODEX_PROFILE_ID) {
+      return { accepted: true, sessionId, opts };
+    }
+    if (explicitProfile && existing && !rawFromOptions
+      && existing.codexProfileId === explicitProfile.id) {
+      return {
+        accepted: true,
+        sessionId,
+        opts: { ...opts, ...getCodexProfileSessionFields(explicitProfile) },
+      };
+    }
+    if (existingProfile && existingProfile.id !== DEFAULT_CODEX_PROFILE_ID && !rawFromOptions) {
+      return {
+        accepted: true,
+        sessionId,
+        opts: { ...opts, ...getCodexProfileSessionFields(existingProfile) },
+      };
+    }
+    if (!rawFromOptions && codexProfiles.length === 1) {
+      return { accepted: true, sessionId, opts };
+    }
+    if (!rawFromOptions && typeof sessionId === "string" && sessionId.startsWith("s1.")) {
+      if (existing && existingProfile) {
+        return {
+          accepted: true,
+          sessionId,
+          opts: {
+            ...opts,
+            rawSessionId: existing.rawSessionId,
+            ...getCodexProfileSessionFields(existingProfile),
+          },
+        };
+      }
+      if (codexProfiles.length > 1) return { accepted: false, sessionId, opts };
+      return { accepted: true, sessionId, opts };
+    }
+    const profile = resolveLocalCodexProfileForSession(sessionId, opts);
+    if (!profile || profile === "ambiguous") return { accepted: false, sessionId, opts };
+    if (profile.id === DEFAULT_CODEX_PROFILE_ID) return { accepted: true, sessionId, opts };
+    const rawSessionId = rawFromOptions || sessionId;
+    const identity = codexProfileIdentity(rawSessionId, profile, "default");
+    return {
+      accepted: true,
+      sessionId: identity.sessionId,
+      opts: {
+        ...opts,
+        rawSessionId: identity.rawSessionId,
+        ...getCodexProfileSessionFields(profile),
+      },
+    };
+  }
   const loadCodexLogMonitor = options.loadCodexLogMonitor || (() => require("../agents/codex-log-monitor"));
   const loadCodexAgent = options.loadCodexAgent || (() => require("../agents/codex"));
   const codexSubagentClassifier = options.codexSubagentClassifier || new DefaultCodexSubagentClassifier();
@@ -220,6 +343,7 @@ function createAgentRuntimeMain(options = {}) {
     : null;
 
   let codexMonitor = null;
+  const codexMonitors = new Map();
   let disposed = false;
   const codexTurnFence = createCodexTurnFence({ now, debugLog });
   // Canonical session ids an official local Codex SessionEnd deleted. Bounded
@@ -298,7 +422,10 @@ function createAgentRuntimeMain(options = {}) {
   const loadCodexArchiveTracker = typeof options.loadCodexArchiveTracker === "function"
     ? options.loadCodexArchiveTracker
     : null;
-  let codexArchiveTracker = options.codexArchiveTracker || null;
+  const codexArchiveTrackers = new Map();
+  if (options.codexArchiveTracker && defaultCodexProfile) {
+    codexArchiveTrackers.set(defaultCodexProfile.id, options.codexArchiveTracker);
+  }
 
   function clearCodexSessionTracking(sessionId) {
     if (codexTurnFence && typeof codexTurnFence.clearSession === "function") {
@@ -319,13 +446,14 @@ function createAgentRuntimeMain(options = {}) {
     );
   }
 
-  function collectLiveLocalCodexCandidates() {
+  function collectLiveLocalCodexCandidates(codexProfileId = DEFAULT_CODEX_PROFILE_ID) {
     const state = getStateRuntime();
     const sessions = state && state.sessions;
     const out = [];
     if (!sessions || typeof sessions.forEach !== "function") return out;
     sessions.forEach((session, id) => {
       if (!isLocalCodexSessionRecord(session)) return;
+      if ((session.codexProfileId || DEFAULT_CODEX_PROFILE_ID) !== codexProfileId) return;
       const raw = bareCodexSessionId(session.rawSessionId || id);
       if (raw) out.push(raw);
     });
@@ -384,13 +512,14 @@ function createAgentRuntimeMain(options = {}) {
     return typeof state.dismissSession === "function" && state.dismissSession(sessionId) === true;
   }
 
-  function handleCodexArchiveConfirmed(rawArchiveId) {
+  function handleCodexArchiveConfirmed(codexProfileId, rawArchiveId) {
     const state = getStateRuntime();
     const sessions = state && state.sessions;
     if (!sessions || typeof sessions.forEach !== "function") return false;
     const targets = [];
     sessions.forEach((session, id) => {
       if (!isLocalCodexSessionRecord(session)) return;
+      if ((session.codexProfileId || DEFAULT_CODEX_PROFILE_ID) !== codexProfileId) return;
       const raw = bareCodexSessionId(session.rawSessionId || id);
       if (raw === rawArchiveId) targets.push(id);
     });
@@ -401,8 +530,10 @@ function createAgentRuntimeMain(options = {}) {
     return retired;
   }
 
-  function ensureCodexArchiveTracker() {
-    if (codexArchiveTracker) return codexArchiveTracker;
+  function ensureCodexArchiveTracker(profile = defaultCodexProfile) {
+    if (!profile) return null;
+    const existing = codexArchiveTrackers.get(profile.id);
+    if (existing) return existing;
     if (typeof loadCodexArchiveTracker !== "function") return null;
     try {
       const createTracker = loadCodexArchiveTracker();
@@ -410,41 +541,53 @@ function createAgentRuntimeMain(options = {}) {
         && typeof options.codexArchiveOptions === "object"
         ? options.codexArchiveOptions
         : {};
-      codexArchiveTracker = createTracker({
+      const codexHome = profile.id === DEFAULT_CODEX_PROFILE_ID
+        && typeof trackerOptions.codexHome === "string"
+        ? trackerOptions.codexHome
+        : profile.home;
+      const tracker = createTracker({
         debugLog,
         now,
-        getLiveCandidateIds: collectLiveLocalCodexCandidates,
-        onArchiveConfirmed: handleCodexArchiveConfirmed,
         ...trackerOptions,
+        codexHome,
+        getLiveCandidateIds: () => collectLiveLocalCodexCandidates(profile.id),
+        onArchiveConfirmed: (rawArchiveId) => handleCodexArchiveConfirmed(profile.id, rawArchiveId),
       });
+      codexArchiveTrackers.set(profile.id, tracker);
+      return tracker;
     } catch (err) {
       logWarn("Clawd: Codex archive tracker not started:", err && err.message);
-      codexArchiveTracker = null;
+      return null;
     }
-    return codexArchiveTracker;
   }
 
   function startCodexArchiveTracker() {
     if (disposed) return null;
-    const tracker = ensureCodexArchiveTracker();
-    if (tracker && typeof tracker.start === "function") tracker.start();
-    return tracker;
+    for (const profile of codexProfiles) {
+      const tracker = ensureCodexArchiveTracker(profile);
+      if (tracker && typeof tracker.start === "function") tracker.start();
+    }
+    return defaultCodexProfile ? codexArchiveTrackers.get(defaultCodexProfile.id) || null : null;
   }
 
   function stopCodexArchiveTracker() {
-    if (codexArchiveTracker && typeof codexArchiveTracker.stop === "function") {
-      codexArchiveTracker.stop();
+    for (const tracker of codexArchiveTrackers.values()) {
+      if (tracker && typeof tracker.stop === "function") tracker.stop();
     }
   }
 
   function shouldSuppressCodexArchive(rawSessionId, opts = {}) {
-    if (!codexArchiveTracker || typeof codexArchiveTracker.isArchived !== "function") return false;
+    const profileId = typeof opts.codexProfileId === "string"
+      ? opts.codexProfileId
+      : DEFAULT_CODEX_PROFILE_ID;
+    const tracker = codexArchiveTrackers.get(profileId);
+    if (!tracker || typeof tracker.isArchived !== "function") return false;
     if (!opts || opts.agentId !== "codex") return false;
     if ((opts.profileId || "local") !== "local") return false;
     if (opts.host || opts.wslDistro) return false;
     const raw = bareCodexSessionId(rawSessionId);
     if (!raw) return false;
-    return codexArchiveTracker.isArchived(raw) === true;
+    return tracker.isArchived(raw) === true;
   }
 
   // JSONL fallback rescue. Official Codex hooks normally emit a Stop that closes
@@ -525,6 +668,10 @@ function createAgentRuntimeMain(options = {}) {
   }
 
   function updateSessionFromServer(sessionId, state, event, opts = {}) {
+    const profileScope = scopeLocalCodexSession(sessionId, opts);
+    if (!profileScope.accepted) return false;
+    sessionId = profileScope.sessionId;
+    opts = profileScope.opts;
     // Late official hooks for a locally archived task must not recreate an
     // entry. Scoped to the local profile only; remote/WSL are never matched.
     // Decision-bearing permission prompts never reach here for an archived
@@ -533,6 +680,7 @@ function createAgentRuntimeMain(options = {}) {
     if (shouldSuppressCodexArchive(opts && opts.rawSessionId ? opts.rawSessionId : sessionId, {
       agentId: opts && opts.agentId,
       profileId: opts && opts.profileId,
+      codexProfileId: opts && opts.codexProfileId,
       host: opts && opts.host,
       wslDistro: opts && opts.wslDistro,
     })) {
@@ -698,6 +846,10 @@ function createAgentRuntimeMain(options = {}) {
   }
 
   function updateSessionMetadataFromServer(sessionId, opts = {}) {
+    const profileScope = scopeLocalCodexSession(sessionId, opts);
+    if (!profileScope.accepted) return false;
+    sessionId = profileScope.sessionId;
+    opts = profileScope.opts;
     const state = getStateRuntime();
     const accepted = !!(state && typeof state.updateSessionMetadata === "function"
       && state.updateSessionMetadata(sessionId, opts));
@@ -755,13 +907,14 @@ function createAgentRuntimeMain(options = {}) {
     // decided to start; re-reading the persisted gate here races the settings
     // store write. Match the existing monitor.start() semantics.
     if (agentId !== "codex" || disposed) return;
-    if (codexMonitor) codexMonitor.start();
+    if (!codexMonitors.size) for (const profile of codexProfiles) createCodexLogMonitor(profile);
+    for (const monitor of codexMonitors.values()) monitor.start();
     startCodexArchiveTracker();
   }
 
   function stopMonitorForAgent(agentId) {
     if (agentId !== "codex") return;
-    if (codexMonitor) codexMonitor.stop();
+    for (const monitor of codexMonitors.values()) monitor.stop();
     stopCodexArchiveTracker();
   }
 
@@ -876,19 +1029,22 @@ function createAgentRuntimeMain(options = {}) {
     return removed;
   }
 
-  function startCodexLogMonitor() {
-    if (codexMonitor) {
-      if (isAgentEnabled("codex")) {
-        codexMonitor.start();
-        startCodexArchiveTracker();
-      }
-      return codexMonitor;
-    }
+  function createCodexLogMonitor(profile) {
+    if (!profile || codexMonitors.has(profile.id)) return codexMonitors.get(profile && profile.id) || null;
     try {
       const CodexLogMonitor = loadCodexLogMonitor();
-      const codexAgent = loadCodexAgent();
-      codexMonitor = new CodexLogMonitor(codexAgent, (sid, state, event, extra) => {
-        const sessionIdentity = resolveSessionIdentity(sid, "local");
+      const originalCodexAgent = loadCodexAgent();
+      const codexAgent = profile.id === DEFAULT_CODEX_PROFILE_ID
+        ? originalCodexAgent
+        : {
+          ...originalCodexAgent,
+          logConfig: {
+            ...(originalCodexAgent && originalCodexAgent.logConfig || {}),
+            sessionDir: path.join(profile.home, "sessions"),
+          },
+        };
+      const monitor = new CodexLogMonitor(codexAgent, (sid, state, event, extra) => {
+        const sessionIdentity = codexProfileIdentity(sid, profile);
         const sessionId = sessionIdentity.sessionId;
         // Subscription quota is account state, not session state: it goes
         // to the session-independent per-source store (null host = this
@@ -898,6 +1054,7 @@ function createAgentRuntimeMain(options = {}) {
           ...buildCodexMonitorSessionOptions(extra, { includeHeadless: true, includeRecap: true }),
           profileId: sessionIdentity.profileId,
           rawSessionId: sessionIdentity.rawSessionId,
+          ...getCodexProfileSessionFields(profile),
         };
         const accountQuotas = normalizeCodexMonitorAccountQuotas(extra);
         recordCodexTurnIdCapture(sessionId, "jsonl", event, extra && extra.turnId);
@@ -905,7 +1062,10 @@ function createAgentRuntimeMain(options = {}) {
           if (!accountQuotas) return;
           const stateRuntime = getStateRuntime();
           if (stateRuntime && typeof stateRuntime.updateAccountQuota === "function") {
-            stateRuntime.updateAccountQuota(null, accountQuotas);
+            stateRuntime.updateAccountQuota(profile.quotaSource, {
+              ...accountQuotas,
+              ...(!profile.isDefault ? { displayHost: profile.label } : {}),
+            });
           }
         };
         const annotateCodexContextUsage = () => {
@@ -938,6 +1098,7 @@ function createAgentRuntimeMain(options = {}) {
         if (shouldSuppressCodexArchive(sessionIdentity.rawSessionId, {
           agentId: "codex",
           profileId: sessionIdentity.profileId,
+          codexProfileId: profile.id,
         })) {
           annotateCodexContextUsage();
           annotateCodexAccountQuota();
@@ -996,20 +1157,24 @@ function createAgentRuntimeMain(options = {}) {
         updateSession(sessionId, state, event, sessionOptions);
         annotateCodexAccountQuota();
       }, {
-        classifier: localCodexSubagentClassifier,
+        ...(profile.id === DEFAULT_CODEX_PROFILE_ID ? {} : { codexDir: profile.home }),
+        classifier: profile.id === DEFAULT_CODEX_PROFILE_ID
+          ? localCodexSubagentClassifier
+          : createCodexProfileScopedClassifier(codexSubagentClassifier, profile),
         onActivity: (sid, activityState, _event, activity) => {
-          const sessionIdentity = resolveSessionIdentity(sid, "local");
+          const sessionIdentity = codexProfileIdentity(sid, profile);
           if (shouldSuppressCodexArchive(sessionIdentity.rawSessionId, {
-            agentId: "codex", profileId: sessionIdentity.profileId,
+            agentId: "codex", profileId: sessionIdentity.profileId, codexProfileId: profile.id,
           }) || hasCodexSessionEndTombstone(sessionIdentity.sessionId)) return;
           touchLocalCodexProgress(sessionIdentity.sessionId, activityState, activity);
         },
         onUserInputRequest: (sid, request, extra) => {
-          const sessionIdentity = resolveSessionIdentity(sid, "local");
+          const sessionIdentity = codexProfileIdentity(sid, profile);
           const sessionId = sessionIdentity.sessionId;
           if (shouldSuppressCodexArchive(sessionIdentity.rawSessionId, {
             agentId: "codex",
             profileId: sessionIdentity.profileId,
+            codexProfileId: profile.id,
           })) return;
           // A live blocking question proves the turn is still active even when
           // the Desktop app has emitted no ordinary lifecycle hook during a
@@ -1027,6 +1192,7 @@ function createAgentRuntimeMain(options = {}) {
             ...buildCodexMonitorSessionOptions(extra, { includeHeadless: true }),
             profileId: sessionIdentity.profileId,
             rawSessionId: sessionIdentity.rawSessionId,
+            ...getCodexProfileSessionFields(profile),
             transientPermissionEvent: true,
             // Card/focus recovery is independent of accepted activity. Only
             // the fenced touch above may extend the session's lifetime, and
@@ -1035,7 +1201,7 @@ function createAgentRuntimeMain(options = {}) {
           });
         },
         onUserInputResolved: (sid, callId, resolution = null) => {
-          const sessionId = resolveSessionIdentity(sid, "local").sessionId;
+          const sessionId = codexProfileIdentity(sid, profile).sessionId;
           // The correlated function_call_output is also forward progress. It
           // used to close only the card, leaving the stale clock untouched.
           // Terminal cleanup (task_complete / turn_aborted) uses the same card
@@ -1046,21 +1212,33 @@ function createAgentRuntimeMain(options = {}) {
           clearCodexUserInputBubbles(sessionId, callId, "codex-user-input-resolved");
         },
       });
-      if (isAgentEnabled("codex")) codexMonitor.start();
+      codexMonitors.set(profile.id, monitor);
+      if (profile.id === DEFAULT_CODEX_PROFILE_ID) codexMonitor = monitor;
+      return monitor;
     } catch (err) {
-      logWarn("Clawd: Codex log monitor not started:", err && err.message);
+      logWarn(`Clawd: ${profile.label} log monitor not started:`, err && err.message);
+      return null;
+    }
+  }
+
+  function startCodexLogMonitor() {
+    for (const profile of codexProfiles) createCodexLogMonitor(profile);
+    if (isAgentEnabled("codex")) {
+      for (const monitor of codexMonitors.values()) monitor.start();
     }
     // The archive observer is independent of the JSONL monitor, so it still
     // starts when the monitor is unavailable.
     if (isAgentEnabled("codex")) startCodexArchiveTracker();
-    return codexMonitor;
+    return codexMonitor || codexMonitors.values().next().value || null;
   }
 
   function cleanup() {
     disposed = true;
     workBuddySessionTitleTracker.clear();
     clearRetiredWorkBuddySessions();
-    if (codexMonitor && typeof codexMonitor.stop === "function") codexMonitor.stop();
+    for (const monitor of codexMonitors.values()) {
+      if (monitor && typeof monitor.stop === "function") monitor.stop();
+    }
     stopCodexArchiveTracker();
     resetLocalCodexLifecycleTracking();
     if (qoderSessionTitleTracker && typeof qoderSessionTitleTracker.clear === "function") {
@@ -1077,6 +1255,8 @@ function createAgentRuntimeMain(options = {}) {
 
   return {
     getCodexSubagentClassifier: () => codexSubagentClassifier,
+    getCodexProfiles: () => codexProfiles.slice(),
+    getCodexMonitors: () => new Map(codexMonitors),
     startCodexLogMonitor,
     startMonitorForAgent,
     stopMonitorForAgent,
@@ -1093,7 +1273,10 @@ function createAgentRuntimeMain(options = {}) {
     shouldSuppressCodexArchive,
     startCodexArchiveTracker,
     stopCodexArchiveTracker,
-    getCodexArchiveTracker: () => codexArchiveTracker,
+    getCodexArchiveTracker: () => defaultCodexProfile
+      ? codexArchiveTrackers.get(defaultCodexProfile.id) || null
+      : null,
+    getCodexArchiveTrackers: () => new Map(codexArchiveTrackers),
     getWorkBuddySessionTitleTracker: () => workBuddySessionTitleTracker,
     resetLocalCodexLifecycleTracking,
     getCodexTurnFenceSnapshot: (sessionId) => codexTurnFence.getSnapshot(sessionId),

@@ -177,6 +177,7 @@ function getSessionAliasEntry(id, sessionLike, sessionAliases = {}) {
     {
       cwd: sessionLike && sessionLike.cwd,
       profileId: sessionLike && sessionLike.profileId,
+      codexProfileId: sessionLike && sessionLike.codexProfileId,
     }
   );
   if (scopedAliasKey && sessionAliases[scopedAliasKey]) return sessionAliases[scopedAliasKey];
@@ -187,6 +188,7 @@ function getSessionAliasEntry(id, sessionLike, sessionAliases = {}) {
     sessionLike && sessionLike.agentId,
     rawSessionId
   );
+  if (sessionLike && sessionLike.codexProfileId && sessionLike.codexProfileId !== "default") return null;
   if (legacyAliasKey && legacyAliasKey !== scopedAliasKey) return sessionAliases[legacyAliasKey] || null;
   return legacyAliasKey ? sessionAliases[legacyAliasKey] : null;
 }
@@ -195,7 +197,8 @@ function getEffectiveSessionTitle(id, sessionLike, options = {}) {
   const readThreadName = typeof options.readCodexThreadName === "function"
     ? options.readCodexThreadName
     : readCodexThreadName;
-  if (sessionLike && sessionLike.agentId === "codex" && !sessionLike.host) {
+  if (sessionLike && sessionLike.agentId === "codex" && !sessionLike.host
+    && (!sessionLike.codexProfileId || sessionLike.codexProfileId === "default")) {
     const threadName = normalizeTitle(readThreadName((sessionLike && sessionLike.rawSessionId) || id));
     if (threadName) return threadName;
   }
@@ -422,6 +425,12 @@ function buildSessionSnapshotEntry(id, session, sessionAliases = {}, options = {
     provider: (session && session.provider) || null,
     codexOriginator: (session && session.codexOriginator) || null,
     codexSource: (session && session.codexSource) || null,
+    ...(session && session.codexProfileId && session.codexProfileId !== "default"
+      ? {
+        codexProfileId: session.codexProfileId,
+        codexProfileLabel: session.codexProfileLabel || session.codexProfileId,
+      }
+      : {}),
     dshCarrier: (session && session.dshCarrier) || null,
     contextUsage: snapshotContextUsage(session),
     assistantLastOutput: (session && typeof session.assistantLastOutput === "string")
@@ -478,7 +487,8 @@ function buildSessionSnapshot(sessions, options = {}) {
   if (typeof readThreadName !== "function") {
     const localCodexSessionIds = [];
     for (const [id, session] of normalizeSessionsIterable(sessions)) {
-      if (session && session.agentId === "codex" && !session.host) {
+      if (session && session.agentId === "codex" && !session.host
+        && (!session.codexProfileId || session.codexProfileId === "default")) {
         localCodexSessionIds.push(session.rawSessionId || id);
       }
     }
@@ -594,6 +604,7 @@ function getActiveSessionAliasKeys(sessions) {
       {
         cwd: session && session.cwd,
         profileId: session && session.profileId,
+        codexProfileId: session && session.codexProfileId,
       }
     );
     if (key) keys.add(key);
@@ -617,6 +628,7 @@ function sessionSnapshotSignature(snapshot) {
     // that confirms unchanged numbers — its once-a-minute move must reach
     // the renderers, so it must move the signature too.
     accountQuota: (snapshot.accountQuota || []).map((entry) => ({
+      sourceKey: entry.sourceKey === undefined ? null : entry.sourceKey,
       host: entry.host,
       antigravityQuota: entry.antigravityQuota
         ? { group: entry.antigravityQuota.group, lastSeenAt: entry.antigravityQuota.lastSeenAt }
@@ -662,6 +674,10 @@ function sessionSnapshotSignature(snapshot) {
       provider: entry.provider,
       codexOriginator: entry.codexOriginator,
       codexSource: entry.codexSource,
+      ...(entry.codexProfileId ? {
+        codexProfileId: entry.codexProfileId,
+        codexProfileLabel: entry.codexProfileLabel,
+      } : {}),
       dshCarrier: entry.dshCarrier,
       contextUsage: entry.contextUsage,
       assistantLastOutput: entry.assistantLastOutput,

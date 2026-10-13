@@ -364,6 +364,32 @@ describe("account quota store", () => {
     assert.strictEqual(store.snapshot({ mergeSources: true })[0].claudeQuota.updatedAt, 1000);
   });
 
+  it("keeps configured local Codex profiles separate from merged subscription sources", () => {
+    let now = 1000;
+    const store = createAccountQuotaStore({ persistPath: null, now: () => now });
+    store.update(null, {
+      codexQuota: { codexWeekly: { usedPercent: 10, resetAt: 5000 } },
+    });
+    now = 2000;
+    store.update("remote:workbox", {
+      displayHost: "workbox",
+      codexQuota: { codexWeekly: { usedPercent: 30, resetAt: 5000 } },
+    });
+    now = 3000;
+    store.update("codex-profile:company", {
+      displayHost: "Company",
+      codexQuota: { codexWeekly: { usedPercent: 80, resetAt: 5000 } },
+    });
+
+    const merged = store.snapshot({ mergeSources: true });
+    assert.equal(merged.length, 2);
+    assert.equal(merged[0].sourceKey, null);
+    assert.equal(merged[0].codexQuota.group.codexWeekly.usedPercent, 30);
+    assert.equal(merged[1].sourceKey, "codex-profile:company");
+    assert.equal(merged[1].host, "Company");
+    assert.equal(merged[1].codexQuota.group.codexWeekly.usedPercent, 80);
+  });
+
   it("mergeSources arbitrates generic and Spark independently", () => {
     let nowMs = 1000;
     const store = createAccountQuotaStore({ persistPath: null, now: () => nowMs });

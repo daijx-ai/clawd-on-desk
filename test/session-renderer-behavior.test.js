@@ -144,6 +144,7 @@ function translations() {
     sessionFocusUnavailableRemote: "Remote sessions cannot focus a terminal on this computer.",
     sessionFocusUnavailableWebui: "WebUI sessions do not have a local terminal window.",
     sessionFocusUnavailableMissingTerminalInfo: "This session did not provide terminal window information.",
+    sessionFocusUnavailableCodexProfile: "Switch to this profile in Codex before opening the session.",
     sessionOpenFolderFailed: "Could not open folder: {reason}",
     sessionOpenFolderUnavailable: "This folder is no longer available.",
     sessionJustNow: "now",
@@ -768,6 +769,7 @@ test("unfocusable and folder feedback copy exists in all supported languages", (
     "sessionFocusUnavailableRemote",
     "sessionFocusUnavailableWebui",
     "sessionFocusUnavailableMissingTerminalInfo",
+    "sessionFocusUnavailableCodexProfile",
   ];
   for (const lang of SUPPORTED_LANGS) {
     for (const key of keys) assert.ok(i18n[lang][key], `${lang}.${key} is required`);

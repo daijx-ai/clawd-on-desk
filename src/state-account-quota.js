@@ -463,13 +463,16 @@ function createAccountQuotaStore(options = {}) {
       if (!b.host) return 1;
       return a.host.localeCompare(b.host);
     });
-    if (options.mergeSources !== true || out.length <= 1) return out;
+    const localCodexProfiles = out.filter((entry) => typeof entry.sourceKey === "string"
+      && entry.sourceKey.startsWith("codex-profile:"));
+    const mergeableSources = out.filter((entry) => !localCodexProfiles.includes(entry));
+    if (options.mergeSources !== true || mergeableSources.length <= 1) return out;
 
     // The merged view is a single synthetic source; nothing can collide with it.
     const merged = { sourceKey: null, host: null };
     let hasAny = false;
     for (const providerKey of QUOTA_PROVIDER_KEYS) {
-      const providerCandidates = out
+      const providerCandidates = mergeableSources
         .map((entry) => entry[providerKey])
         .filter(Boolean);
       const hasLiveProvider = providerCandidates.some((candidate) =>
@@ -522,7 +525,7 @@ function createAccountQuotaStore(options = {}) {
         hasAny = true;
       }
     }
-    return hasAny ? [merged] : [];
+    return hasAny ? [merged, ...localCodexProfiles] : localCodexProfiles;
   }
 
   function flush() {
