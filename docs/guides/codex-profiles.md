@@ -1,6 +1,6 @@
 # Multiple local Codex profiles
 
-Clawd monitors `~/.codex` by default. To monitor other local Codex homes at the same time, create `~/.clawd/codex-profiles.json` (on Windows, use `%USERPROFILE%\.clawd\codex-profiles.json`) and list the additional profiles:
+Clawd uses `CODEX_HOME` when it resolves to a local absolute path; otherwise it monitors `~/.codex`. To monitor other local Codex homes at the same time, create `~/.clawd/codex-profiles.json` (on Windows, use `%USERPROFILE%\.clawd\codex-profiles.json`) and list the additional profiles:
 
 ```json
 {
@@ -14,7 +14,7 @@ Clawd monitors `~/.codex` by default. To monitor other local Codex homes at the 
 }
 ```
 
-Each profile needs a stable `id`, a unique display `label`, and a local Codex home path. Paths may use `~/...` or be absolute. Keep profile homes separate; nested or duplicate homes are rejected. Up to four additional profiles are supported. The default `~/.codex` home cannot be repeated in the list. Restart Clawd after editing the file.
+Each profile needs a stable `id`, a unique display `label`, and a local Codex home path. Paths may use `~/...` or be absolute. Keep profile homes separate; nested or duplicate homes are rejected. Up to four additional profiles are supported. The resolved default home cannot be repeated in the list. Restart Clawd after editing the file.
 
 Clawd reads each profile's local session logs and archive metadata. The Dashboard, Session HUD, quota views, and completion notifications show the configured label. Session state, pending permission associations, archive checks, and quota sources are separated by profile, including when two profiles reuse the same raw session ID.
 

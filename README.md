@@ -39,7 +39,7 @@ Thinking when you prompt, typing when tools run, grooving or juggling for subage
 
 ### Multi-Agent Support
 - **Claude Code** — full integration via command hooks + HTTP permission hooks
-- **Codex CLI** — official hooks with JSONL fallback (`~/.codex/sessions/`), auto-synced by default with real permission bubbles; optional local homes can be added as separate profiles ([guide](docs/guides/codex-profiles.md))
+- **Codex CLI** — official hooks with JSONL fallback (`$CODEX_HOME/sessions/` or `~/.codex/sessions/`), auto-synced by default with real permission bubbles; optional local homes can be added as separate profiles ([guide](docs/guides/codex-profiles.md))
 - **Copilot CLI** — optional command hooks via `~/.copilot/hooks/hooks.json` (install from Settings → AI Coding Tools; see the Copilot guide for manual JSON fallback)
 - **Gemini CLI** — optional command hooks via `~/.gemini/settings.json` (install from Settings → AI Coding Tools or run `npm run install:gemini-hooks`)
 - **Antigravity CLI (agy)** — optional command hooks via `~/.gemini/config/hooks.json` (install from Settings → AI Coding Tools or run `npm run install:antigravity-hooks`); **state-only**: Clawd never pops a permission bubble for agy. Every Allow / Deny / Always-allow choice happens in agy's own terminal menu
