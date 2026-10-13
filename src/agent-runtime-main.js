@@ -1028,15 +1028,13 @@ function createAgentRuntimeMain(options = {}) {
     try {
       const CodexLogMonitor = loadCodexLogMonitor();
       const originalCodexAgent = loadCodexAgent();
-      const codexAgent = profile.id === DEFAULT_CODEX_PROFILE_ID
-        ? originalCodexAgent
-        : {
-          ...originalCodexAgent,
-          logConfig: {
-            ...(originalCodexAgent && originalCodexAgent.logConfig || {}),
-            sessionDir: path.join(profile.home, "sessions"),
-          },
-        };
+      const codexAgent = {
+        ...originalCodexAgent,
+        logConfig: {
+          ...(originalCodexAgent && originalCodexAgent.logConfig || {}),
+          sessionDir: path.join(profile.home, "sessions"),
+        },
+      };
       const monitor = new CodexLogMonitor(codexAgent, (sid, state, event, extra) => {
         const sessionIdentity = codexProfileIdentity(sid, profile);
         const sessionId = sessionIdentity.sessionId;

@@ -223,8 +223,8 @@ describe("agent-runtime-main", () => {
     const harness = makeRealStateHarness();
     const classifierSessionIds = [];
     const codexProfiles = normalizeCodexProfileConfig({
-      profiles: [{ id: "company", label: "Company", home: "/profiles/company-codex" }],
-    }, { home: "/profiles", env: {} });
+      profiles: [{ id: "company", label: "Company", home: "/profiles/.codex" }],
+    }, { home: "/profiles", env: { CODEX_HOME: "/profiles/personal-codex" } });
     const runtime = createAgentRuntimeMain({
       codexProfiles,
       loadCodexLogMonitor: () => FakeMonitor,
@@ -242,9 +242,9 @@ describe("agent-runtime-main", () => {
     try {
       runtime.startCodexLogMonitor();
       assert.equal(instances.length, 2);
-      assert.equal(instances[0].agent.logConfig.sessionDir, "~/.codex/sessions");
-      assert.equal(instances[1].agent.logConfig.sessionDir, "/profiles/company-codex/sessions");
-      assert.equal(instances[1].options.codexDir, "/profiles/company-codex");
+      assert.equal(instances[0].agent.logConfig.sessionDir, "/profiles/personal-codex/sessions");
+      assert.equal(instances[1].agent.logConfig.sessionDir, "/profiles/.codex/sessions");
+      assert.equal(instances[1].options.codexDir, "/profiles/.codex");
 
       const rawSessionId = "codex:shared-session-id";
       const companyKey = codexProfileIdentity(rawSessionId, codexProfiles[1]).sessionId;
@@ -834,7 +834,12 @@ describe("agent-runtime-main", () => {
     const calls = [];
     const classifier = { classify: () => null };
     const FakeMonitor = makeFakeMonitorClass(instances);
+    const codexProfiles = normalizeCodexProfileConfig(null, {
+      home: "/users/test",
+      env: {},
+    });
     const runtime = createAgentRuntimeMain({
+      codexProfiles,
       loadCodexLogMonitor: () => FakeMonitor,
       loadCodexAgent: () => ({ id: "codex" }),
       codexSubagentClassifier: classifier,
@@ -847,7 +852,8 @@ describe("agent-runtime-main", () => {
 
     assert.equal(monitor, instances[0]);
     assert.equal(monitor.started, 1);
-    assert.deepStrictEqual(monitor.agent, { id: "codex" });
+    assert.equal(monitor.agent.id, "codex");
+    assert.equal(monitor.agent.logConfig.sessionDir, "/users/test/.codex/sessions");
     assert.notEqual(monitor.options.classifier, classifier);
 
     monitor.emit("sid", "working", "response_item:web_search_call", {
