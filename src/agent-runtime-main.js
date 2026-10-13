@@ -116,18 +116,12 @@ function createAgentRuntimeMain(options = {}) {
   const codexProfilesById = new Map(codexProfiles.map((profile) => [profile.id, profile]));
   const defaultCodexProfile = codexProfilesById.get(DEFAULT_CODEX_PROFILE_ID) || codexProfiles[0];
 
-  function resolveLocalCodexProfileForSession(sessionId, opts = {}) {
+  function resolveLocalCodexProfileForSession(opts = {}) {
     if (typeof opts.codexProfileId === "string") {
       const explicitProfile = codexProfilesById.get(opts.codexProfileId);
       if (explicitProfile) return explicitProfile;
     }
-    const state = getStateRuntime();
-    return resolveCodexProfile(
-      opts.transcriptPath,
-      opts.rawSessionId || sessionId,
-      state && state.sessions,
-      codexProfiles
-    );
+    return resolveCodexProfile(opts.transcriptPath, codexProfiles);
   }
 
   function getCodexProfileSessionFields(profile) {
@@ -190,7 +184,7 @@ function createAgentRuntimeMain(options = {}) {
       if (codexProfiles.length > 1) return { accepted: false, sessionId, opts };
       return { accepted: true, sessionId, opts };
     }
-    const profile = resolveLocalCodexProfileForSession(sessionId, opts);
+    const profile = resolveLocalCodexProfileForSession(opts);
     if (!profile || profile === "ambiguous") return { accepted: false, sessionId, opts };
     if (profile.id === DEFAULT_CODEX_PROFILE_ID) return { accepted: true, sessionId, opts };
     const rawSessionId = rawFromOptions || sessionId;

@@ -330,7 +330,7 @@ function handleStatePost(req, res, options) {
       if (shouldResolveLocalCodexProfile) {
         const profiles = typeof ctx.getCodexProfiles === "function" ? ctx.getCodexProfiles() : [];
         localCodexProfileCount = profiles.length || 1;
-        codexProfile = resolveCodexProfile(data.transcript_path, session_id, ctx.sessions, profiles);
+        codexProfile = resolveCodexProfile(data.transcript_path, profiles);
         if (!codexProfile || codexProfile === "ambiguous") {
           recordRequestHookEvent.droppedUnsupported();
           if (typeof ctx.debugLog === "function") {

@@ -40,7 +40,10 @@ function normalizeCodexProfileConfig(config, options = {}) {
   const home = typeof options.home === "string" && path.isAbsolute(options.home)
     ? path.resolve(options.home)
     : os.homedir();
-  const defaultHome = path.join(home, ".codex");
+  const env = options.env && typeof options.env === "object" && !Array.isArray(options.env)
+    ? options.env
+    : process.env;
+  const defaultHome = normalizeHomePath(env.CODEX_HOME, home) || path.join(home, ".codex");
   const profiles = [{
     id: DEFAULT_CODEX_PROFILE_ID,
     label: "Codex",
@@ -113,16 +116,18 @@ function loadCodexProfiles(options = {}) {
   return normalizeCodexProfileConfig(config, options);
 }
 
-function resolveCodexProfile(transcriptPath, _rawSessionId, _sessions, profiles) {
+function resolveCodexProfile(transcriptPath, profiles) {
   const configuredProfiles = Array.isArray(profiles) && profiles.length
     ? profiles
     : normalizeCodexProfileConfig(null);
-  const profileById = new Map(configuredProfiles.map((profile) => [profile.id, profile]));
   if (typeof transcriptPath === "string" && transcriptPath.trim()) {
     const normalizedTranscript = normalizeHomePath(transcriptPath, os.homedir());
     if (!normalizedTranscript) return null;
     const matches = configuredProfiles.filter((profile) => pathContains(profile.home, normalizedTranscript));
-    return matches.length === 1 ? matches[0] : null;
+    if (matches.length === 1) return matches[0];
+    return matches.length === 0 && configuredProfiles.length === 1
+      ? configuredProfiles[0]
+      : null;
   }
 
   return configuredProfiles.length === 1 ? configuredProfiles[0] : "ambiguous";

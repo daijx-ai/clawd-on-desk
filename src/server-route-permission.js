@@ -745,7 +745,7 @@ function handlePermissionPost(req, res, options) {
     if (shouldResolveLocalCodexProfile) {
       const profiles = typeof ctx.getCodexProfiles === "function" ? ctx.getCodexProfiles() : [];
       localCodexProfileCount = profiles.length || 1;
-      codexProfile = resolveCodexProfile(data.transcript_path, data.session_id, ctx.sessions, profiles);
+      codexProfile = resolveCodexProfile(data.transcript_path, profiles);
       if (!codexProfile || codexProfile === "ambiguous") {
         recordRequestHookEvent.droppedUnsupported();
         ctx.permLog("codex profile identity unresolved -> native prompt fallback");

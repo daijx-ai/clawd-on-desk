@@ -20,7 +20,7 @@ test("default profile preserves the existing home and optional profiles are vali
     {
       id: "default",
       label: "Codex",
-      home: "/users/test/.codex",
+      home: "/users/test/personal-codex",
       isDefault: true,
       quotaSource: null,
     },
@@ -89,13 +89,18 @@ test("profile resolution uses transcript ownership and rejects profile-less hook
   const profiles = normalizeCodexProfileConfig({
     profiles: [{ id: "company", label: "Company", home: "/users/test/.codex-company" }],
   }, { home: "/users/test", env: {} });
-  const sessions = new Map();
-  assert.equal(resolveCodexProfile("/users/test/.codex-company/sessions/a.jsonl", "same", sessions, profiles), profiles[1]);
-  assert.equal(resolveCodexProfile("/users/test/.codex-company-other/sessions/a.jsonl", "same", sessions, profiles), null);
-  assert.equal(resolveCodexProfile(null, "same", sessions, profiles), "ambiguous");
+  assert.equal(resolveCodexProfile("/users/test/.codex-company/sessions/a.jsonl", profiles), profiles[1]);
+  assert.equal(resolveCodexProfile("/users/test/.codex-company-other/sessions/a.jsonl", profiles), null);
+  assert.equal(resolveCodexProfile(null, profiles), "ambiguous");
+});
 
-  sessions.set("a", {
-    agentId: "codex", profileId: "local", rawSessionId: "same", codexProfileId: "company",
+test("single-profile routing preserves legacy custom transcript paths", () => {
+  const profiles = normalizeCodexProfileConfig(null, {
+    home: "/users/test",
+    env: { CODEX_HOME: "/users/test/custom-codex" },
   });
-  assert.equal(resolveCodexProfile(null, "same", sessions, profiles), "ambiguous");
+
+  assert.equal(profiles[0].home, "/users/test/custom-codex");
+  assert.equal(resolveCodexProfile("/synthetic/legacy-session.jsonl", profiles), profiles[0]);
+  assert.equal(resolveCodexProfile(null, profiles), profiles[0]);
 });
