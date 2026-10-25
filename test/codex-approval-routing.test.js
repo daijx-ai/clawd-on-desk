@@ -213,3 +213,31 @@ test("PR #1156 follow-up: symlinked Codex session directories accept their real 
     assert.equal(f.route().owner, "clawd", name);
   }
 });
+
+
+test("approval evidence uses native canonical paths for home, session roots and transcript", (t) => {
+  const f = fixture(t);
+  const native = t.mock.method(fs.realpathSync, "native");
+  assert.equal(f.route().owner, "clawd");
+  const paths = native.mock.calls.map(call => call.arguments[0]);
+  assert.ok(paths.includes(f.home));
+  assert.ok(paths.includes(f.file));
+  assert.ok(paths.includes(path.join(fs.realpathSync.native(f.home), "sessions")));
+});
+
+test("Windows namespaced transcript paths preserve current-turn and containment checks", {
+  skip: process.platform !== "win32" ? "Uses real Windows namespaced filesystem paths." : false,
+}, (t) => {
+  const f = fixture(t);
+  f.data.transcript_path = path.toNamespacedPath(f.file);
+  assert.deepEqual(f.route({ codexHome: path.toNamespacedPath(f.home) }), {
+    owner: "clawd", reason: "current-human-reviewer",
+  });
+  f.data.turn_id = "wrong-turn";
+  assert.equal(f.route().owner, "codex");
+  f.data.turn_id = TURN;
+  const foreign = path.join(f.home, "foreign.jsonl");
+  fs.copyFileSync(f.file, foreign);
+  f.data.transcript_path = path.toNamespacedPath(foreign);
+  assert.deepEqual(f.route(), { owner: "codex", reason: "foreign-transcript" });
+});

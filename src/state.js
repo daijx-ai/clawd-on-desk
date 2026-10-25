@@ -3,7 +3,7 @@
 
 let screen;
 try { ({ screen } = require("electron")); } catch { screen = null; }
-const { normalizePlanProgress } = require("./codex-plan-progress");
+const { normalizePlanProgress } = require("../hooks/codex-plan-progress");
 const {
   createStatePriorityConstants,
   getStatePriority,
@@ -1739,9 +1739,15 @@ function updateSessionMetadata(sessionId, opts = {}) {
   const currentCodexTurnId = codexSessionTurnIds.get(id) || null;
   const planTurnMatches = !!incomingPlanProgressTurnId
     && (!currentCodexTurnId || currentCodexTurnId === incomingPlanProgressTurnId);
-  if (hasPlanProgress && hasPlanProgressTurnId && session.agentId === "codex" && planTurnMatches) {
+  const incomingPlanSource = opts.planProgressSource === "codex-official" ? "codex-official" : "jsonl";
+  if (hasPlanProgress && hasPlanProgressTurnId && session.agentId === "codex" && planTurnMatches
+    && (incomingPlanSource === "codex-official" || session.planProgressSource !== "codex-official")) {
     if (!currentCodexTurnId && incomingPlanProgressTurnId) {
       codexSessionTurnIds.set(id, incomingPlanProgressTurnId);
+      applied = true;
+    }
+    if (session.planProgressSource !== incomingPlanSource) {
+      session.planProgressSource = incomingPlanSource;
       applied = true;
     }
     if (JSON.stringify(session.planProgress || null) !== JSON.stringify(incomingPlanProgress)) {
@@ -2352,6 +2358,7 @@ function updateSession(sessionId, state, event, opts = {}) {
     contextUsageOrigin = null,
     planProgress = undefined,
     planProgressTurnId = undefined,
+    planProgressSource = null,
     turnId = null,
     assistantLastOutput = null,
     assistantLastOutputTruncated = false,
@@ -2578,6 +2585,9 @@ function updateSession(sessionId, state, event, opts = {}) {
         planProgress: srcAgentId === "codex" && existing && existing.agentId === "codex"
           ? existing.planProgress || null
           : null,
+        planProgressSource: srcAgentId === "codex" && existing && existing.agentId === "codex"
+          ? existing.planProgressSource || null
+          : null,
         recentEvents,
         pidReachable: resolvePidReachable(
           replaceProcessMetadata === true ? null : existing,
@@ -2714,13 +2724,19 @@ function updateSession(sessionId, state, event, opts = {}) {
     : normalizeCodexTurnId(planProgressTurnId);
   const planProgressTurnMatches = !!normalizedPlanProgressTurnId
     && normalizedPlanProgressTurnId === srcCodexTurnId;
+  const incomingPlanSource = planProgressSource === "codex-official" ? "codex-official" : "jsonl";
+  const acceptPlanProgress = normalizedPlanProgress !== undefined && planProgressTurnMatches
+    && (incomingPlanSource === "codex-official" || !existing || existing.planProgressSource !== "codex-official");
+  const srcPlanProgressSource = srcAgentId !== "codex" || startsNewCodexTurn
+    ? null
+    : (acceptPlanProgress ? incomingPlanSource : (existing && existing.planProgressSource) || null);
   const srcPlanProgress = srcAgentId !== "codex"
     ? null
     : (startsNewCodexTurn
       ? null
       : (normalizedPlanProgress === undefined
         ? (existing && existing.planProgress) || null
-        : (planProgressTurnMatches ? normalizedPlanProgress : (existing && existing.planProgress) || null)));
+        : (acceptPlanProgress ? normalizedPlanProgress : (existing && existing.planProgress) || null)));
   // Only accepted lifecycle traffic may change the private turn owner.
   // An id-less new turn clears the old checklist and its ownership.
   if (srcAgentId === "codex" && srcCodexTurnId) {
@@ -3028,7 +3044,7 @@ function updateSession(sessionId, state, event, opts = {}) {
     opencodeAttachUrl === undefined && existing && existing.opencodeAttachSource === attachSource
       ? existing.opencodeAttachUrl : opencodeAttachUrl
   ) : null;
-  const base = { opencodeAttachUrl: attachUrl, opencodeAttachSource: attachSource, sourcePid: srcPid, wtHwnd: srcWtHwnd, cwd: srcCwd, editor: srcEditor, pidChain: srcPidChain, tmuxSocket: srcTmuxSocket, tmuxClient: srcTmuxClient, orcaPaneKey: srcOrcaPaneKey, herdrPaneId: srcHerdr.herdrPaneId, herdrSocket: srcHerdr.herdrSocket, agentPid: srcAgentPid, agentId: srcAgentId, profileId: (existing && existing.profileId) || profileId || "local", rawSessionId: (existing && existing.rawSessionId) || rawSessionId || sessionId, sessionAutomationIdentity: srcSessionAutomationIdentity, host: srcHost, wslDistro: srcWslDistro, headless: srcHeadless, platform: srcPlatform, model: srcModel, provider: srcProvider, codexOriginator: srcCodexOriginator, codexSource: srcCodexSource, dshCarrier: srcDshCarrier, ghosttyTerminalId: srcGhosttyTerminalId, sessionTitle: srcSessionTitle, sessionTitleFromPrompt: srcSessionTitleFromPrompt, contextUsage: srcContextUsage, contextUsageOrigin: srcContextUsageOrigin, planProgress: srcPlanProgress, metadataUpdatedAt: srcMetadataUpdatedAt, assistantLastOutput: srcAssistantLastOutput, assistantLastOutputTruncated: srcAssistantLastOutputTruncated, lastToolName: srcToolName, transcriptPath: srcTranscriptPath, recentEvents, pidReachable, lastToolBoundaryAt: srcLastToolBoundaryAt, lastStopAt: srcLastStopAt, awaitingInputSinceStop: resolveAwaitingInputSinceStop(existing, event), muteNotificationSound: state === "notification" && muteNotificationSound === true, claudeBackgroundSubagentHoldAt };
+  const base = { opencodeAttachUrl: attachUrl, opencodeAttachSource: attachSource, sourcePid: srcPid, wtHwnd: srcWtHwnd, cwd: srcCwd, editor: srcEditor, pidChain: srcPidChain, tmuxSocket: srcTmuxSocket, tmuxClient: srcTmuxClient, orcaPaneKey: srcOrcaPaneKey, herdrPaneId: srcHerdr.herdrPaneId, herdrSocket: srcHerdr.herdrSocket, agentPid: srcAgentPid, agentId: srcAgentId, profileId: (existing && existing.profileId) || profileId || "local", rawSessionId: (existing && existing.rawSessionId) || rawSessionId || sessionId, sessionAutomationIdentity: srcSessionAutomationIdentity, host: srcHost, wslDistro: srcWslDistro, headless: srcHeadless, platform: srcPlatform, model: srcModel, provider: srcProvider, codexOriginator: srcCodexOriginator, codexSource: srcCodexSource, dshCarrier: srcDshCarrier, ghosttyTerminalId: srcGhosttyTerminalId, sessionTitle: srcSessionTitle, sessionTitleFromPrompt: srcSessionTitleFromPrompt, contextUsage: srcContextUsage, contextUsageOrigin: srcContextUsageOrigin, planProgress: srcPlanProgress, planProgressSource: srcPlanProgressSource, metadataUpdatedAt: srcMetadataUpdatedAt, assistantLastOutput: srcAssistantLastOutput, assistantLastOutputTruncated: srcAssistantLastOutputTruncated, lastToolName: srcToolName, transcriptPath: srcTranscriptPath, recentEvents, pidReachable, lastToolBoundaryAt: srcLastToolBoundaryAt, lastStopAt: srcLastStopAt, awaitingInputSinceStop: resolveAwaitingInputSinceStop(existing, event), muteNotificationSound: state === "notification" && muteNotificationSound === true, claudeBackgroundSubagentHoldAt };
   // Desktop apps can reopen a previous conversation on launch, so SessionStart
   // only means "opened" — not "used". Any other lifecycle event is a real action
   // and clears the marker. Only the listed agents carry the field; others are

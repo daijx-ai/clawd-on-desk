@@ -4,7 +4,7 @@ const assert = require("node:assert/strict");
 const { test } = require("node:test");
 const path = require("node:path");
 const os = require("node:os");
-const { normalizePlanProgress, planProgressFromCall } = require("../src/codex-plan-progress");
+const { normalizePlanProgress, planProgressFromCall } = require("../hooks/codex-plan-progress");
 const CodexLogMonitor = require("../agents/codex-log-monitor");
 const codexConfig = require("../agents/codex");
 

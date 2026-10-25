@@ -1,6 +1,6 @@
 "use strict";
 
-const { normalizePlanProgress } = require("./codex-plan-progress");
+const { normalizePlanProgress } = require("../hooks/codex-plan-progress");
 const { normalizeCodexTurnId } = require("./codex-turn-id");
 
 const { normalizeQuotaGroup } = require("../hooks/quota-bucket");

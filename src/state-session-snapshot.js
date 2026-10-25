@@ -13,7 +13,7 @@ const {
 } = require("./state-session-dedupe");
 const { bareCodexSessionId, readCodexThreadName, readCodexThreadNames } = require("../hooks/codex-session-index");
 const { isWslSourced } = require("./remote-process-metadata");
-const { normalizePlanProgress } = require("./codex-plan-progress");
+const { normalizePlanProgress } = require("../hooks/codex-plan-progress");
 
 // ── Session source derivation ────────────────────────────────────────
 

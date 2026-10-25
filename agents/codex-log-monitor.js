@@ -31,7 +31,7 @@ const {
 const { parseCodexUserInputRecord } = require("../hooks/codex-user-input");
 const { getCodexLogEventKey } = require("../hooks/codex-log-event");
 const { normalizeCodexTurnId } = require("../src/codex-turn-id");
-const { planProgressFromCall } = require("../src/codex-plan-progress");
+const { planProgressFromCall } = require("../hooks/codex-plan-progress");
 
 const MAX_TRACKED_FILES = 50;
 const MAX_RETIRED_TRACKED_FILES = 100;

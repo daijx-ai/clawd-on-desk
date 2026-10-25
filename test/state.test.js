@@ -4178,6 +4178,39 @@ describe("updateSession()", () => {
     assert.equal(api.sessions.get("claude:plan").planProgress, null);
   });
 
+  it("keeps official plans authoritative through JSONL refreshes, permissions and Stop, only until the next turn", () => {
+    const sid = "codex:official-plan";
+    const opts = { agentId: "codex", turnId: "A" };
+    const plan = { completed: 1, total: 3, percent: 33 };
+    api.updateSession(sid, "thinking", "UserPromptSubmit", opts);
+    api.updateSession(sid, "working", "PostToolUse", {
+      ...opts, planProgress: plan, planProgressSource: "codex-official",
+    });
+    api.updateSession(sid, "notification", "PermissionRequest", opts);
+    for (const stale of [null, { completed: 0, total: 3 }]) {
+      api.updateSessionMetadata(sid, { expectedAgentId: "codex", planProgress: stale, planProgressTurnId: "A" });
+      api.updateSession(sid, "working", "response_item:function_call", { ...opts, planProgress: stale });
+      assert.deepStrictEqual(api.sessions.get(sid).planProgress, plan);
+    }
+    api.updateSession(sid, "working", "PostToolUse", {
+      ...opts, planProgress: { completed: 2, total: 3 }, planProgressSource: "codex-official",
+    });
+    api.updateSession(sid, "attention", "Stop", opts);
+    api.updateSessionMetadata(sid, { expectedAgentId: "codex", planProgress: null, planProgressTurnId: "A" });
+    assert.equal(api.sessions.get(sid).planProgress.percent, 67);
+    assert.doesNotMatch(JSON.stringify(api.buildSessionSnapshot()), /planProgressSource/);
+    api.updateSession(sid, "thinking", "UserPromptSubmit", { ...opts, turnId: "B" });
+    assert.equal(api.sessions.get(sid).planProgress, null);
+    api.updateSessionMetadata(sid, {
+      expectedAgentId: "codex", planProgress: { completed: 1, total: 2 }, planProgressTurnId: "B",
+    });
+    assert.equal(api.sessions.get(sid).planProgress.percent, 50, "JSONL remains the fallback for a new turn without plan hooks");
+    api.updateSession(sid, "working", "PostToolUse", {
+      ...opts, planProgress: { completed: 3, total: 3 }, planProgressSource: "codex-official",
+    });
+    assert.equal(api.sessions.get(sid).planProgress.percent, 50, "old official turns cannot replace the current plan");
+  });
+
   for (const transientPermissionEvent of [false, true]) {
     it(`preserves Codex plan progress through PermissionRequest (transient=${transientPermissionEvent})`, () => {
       const sid = "codex:permission-plan";

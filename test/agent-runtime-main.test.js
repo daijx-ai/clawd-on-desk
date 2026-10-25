@@ -2152,6 +2152,54 @@ describe("agent-runtime-main", () => {
     }
   });
 
+  it("keeps official structured plans through fallback refreshes and fences old-turn hooks", () => {
+    const instances = [];
+    const harness = makeRealStateHarness();
+    const runtime = createAgentRuntimeMain({
+      loadCodexLogMonitor: () => makeFakeMonitorClass(instances),
+      loadCodexAgent: () => ({ id: "codex" }),
+      codexSubagentClassifier: {},
+      isAgentEnabled: () => true,
+      getStateRuntime: () => harness.state,
+      updateSession: (...args) => harness.state.updateSession(...args),
+    });
+    const rawSessionId = "codex:structured-plan";
+    const sessionId = localSessionKey(rawSessionId);
+    const official = (state, event, turnId, progress) => runtime.updateSessionFromServer(sessionId, state, event, {
+      agentId: "codex", hookSource: "codex-official", profileId: "local", rawSessionId, turnId,
+      ...(progress === undefined ? {} : { planProgress: progress,
+        planProgressTurnId: turnId, planProgressSource: "codex-official" }),
+    });
+    const current = () => harness.state.sessions.get(sessionId);
+    try {
+      const monitor = runtime.startCodexLogMonitor();
+      official("thinking", "UserPromptSubmit", "A");
+      official("working", "PostToolUse", "A", { completed: 1, total: 3 });
+      monitor.emit(rawSessionId, "working", "response_item:custom_tool_call", {
+        turnId: "A", planProgress: null, planProgressTurnId: "A",
+      });
+      assert.deepStrictEqual(current().planProgress, { completed: 1, total: 3, percent: 33 });
+      official("working", "PostToolUse", "A", { completed: 3, total: 3 });
+      official("attention", "Stop", "A");
+      monitor.emit(rawSessionId, "idle", "event_msg:token_count", {
+        turnId: "A", planProgress: { completed: 1, total: 3 }, planProgressTurnId: "A",
+      });
+      assert.strictEqual(current().state, "idle");
+      assert.deepStrictEqual(current().planProgress, { completed: 3, total: 3, percent: 100 });
+      official("thinking", "UserPromptSubmit", "B");
+      assert.strictEqual(current().planProgress, null);
+      official("working", "PostToolUse", "A", { completed: 3, total: 3 });
+      assert.strictEqual(current().planProgress, null);
+      monitor.emit(rawSessionId, "working", "response_item:function_call", {
+        turnId: "B", planProgress: { completed: 1, total: 2 }, planProgressTurnId: "B",
+      });
+      assert.deepStrictEqual(current().planProgress, { completed: 1, total: 2, percent: 50 });
+    } finally {
+      runtime.cleanup();
+      harness.state.cleanup();
+    }
+  });
+
   it("does not restore a rejected old-turn plan into the current turn", () => {
     const instances = [];
     const FakeMonitor = makeFakeMonitorClass(instances);
