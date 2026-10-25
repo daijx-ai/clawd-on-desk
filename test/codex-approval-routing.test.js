@@ -167,17 +167,22 @@ test("PR #1156 follow-up: a requested budget above 32 MiB cannot exceed the hard
 });
 test("PR #1156 follow-up: inode replacement with unchanged size and mtime invalidates the transcript", (t) => {
   const f = fixture(t);
-  const file = fs.realpathSync(f.file);
+  // Match the native canonical path used by the reader, including Windows
+  // short-name expansion and case normalization in CI temporary directories.
+  const file = fs.realpathSync.native(f.file);
+  if (process.platform === "win32") f.data.transcript_path = file.toUpperCase();
   const before = fs.statSync(file);
   const after = { ...before, ino: before.ino === 0 ? 1 : 0 };
   const stat = fs.statSync;
-  t.mock.method(fs, "statSync", (filePath, ...args) => {
+  const statMock = t.mock.method(fs, "statSync", (filePath, ...args) => {
     if (filePath === file) return after;
     return stat(filePath, ...args);
   });
   assert.notEqual(after.ino, before.ino);
   assert.deepEqual({ ...after, ino: before.ino }, { ...before });
-  assert.deepEqual(f.route(), { owner: "codex", reason: "transcript-changed" });
+  const route = f.route();
+  assert.equal(statMock.mock.calls.filter(call => call.arguments[0] === file).length, 1);
+  assert.deepEqual(route, { owner: "codex", reason: "transcript-changed" });
 });
 test("PR #1156 follow-up: a turn context split by a scan block is completed by the next block", (t) => {
   const context = line("turn_context", { turn_id: TURN, approvals_reviewer: "user", approval_policy: "on-request" });
