@@ -2573,6 +2573,11 @@ function updateSession(sessionId, state, event, opts = {}) {
         sessionTitleFromPrompt: srcSessionTitleFromPrompt,
         contextUsage: srcContextUsage,
         contextUsageOrigin: srcContextUsageOrigin,
+        // Permission focus refreshes do not own a turn or a checklist.
+        // Keep the accepted plan while rebuilding an existing Codex row.
+        planProgress: srcAgentId === "codex" && existing && existing.agentId === "codex"
+          ? existing.planProgress || null
+          : null,
         recentEvents,
         pidReachable: resolvePidReachable(
           replaceProcessMetadata === true ? null : existing,

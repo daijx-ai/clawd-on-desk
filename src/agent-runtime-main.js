@@ -1065,11 +1065,13 @@ function createAgentRuntimeMain(options = {}) {
           });
           // On startup, replay's metadata-only snapshot arrives before the
           // pending question creates a session. Apply its matching-turn plan
-          // only after the question card exists.
+          // only after the question card exists and is still a local row.
           const questionTurnId = normalizeCodexTurnId(userInputOptions.turnId);
+          const stateRuntime = getStateRuntime();
           if (questionTurnId && questionTurnId === normalizeCodexTurnId(userInputOptions.planProgressTurnId)
-            && Object.prototype.hasOwnProperty.call(userInputOptions, "planProgress")) {
-            getStateRuntime()?.updateSessionMetadata?.(sessionId, {
+            && Object.prototype.hasOwnProperty.call(userInputOptions, "planProgress")
+            && isLocalCodexSessionRecord(stateRuntime?.sessions?.get(sessionId))) {
+            stateRuntime.updateSessionMetadata?.(sessionId, {
               expectedAgentId: "codex",
               planProgress: userInputOptions.planProgress,
               planProgressTurnId: questionTurnId,

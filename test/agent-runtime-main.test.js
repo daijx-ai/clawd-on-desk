@@ -2240,6 +2240,50 @@ describe("agent-runtime-main", () => {
     }
   });
 
+  for (const [label, provenance] of [
+    ["WSL host", { host: "wsl:Ubuntu", wslDistro: "Ubuntu" }],
+    ["WSL marker", { wslDistro: "Ubuntu" }],
+    ["remote host", { host: "ssh:workstation" }],
+    ["remote profile", { profileId: "remote-workstation" }],
+  ]) {
+    it(`does not recover a local question's plan into an existing ${label} row`, () => {
+      const instances = [];
+      const harness = makeRealStateHarness();
+      const runtime = createAgentRuntimeMain({
+        loadCodexLogMonitor: () => makeFakeMonitorClass(instances),
+        loadCodexAgent: () => ({ id: "codex" }),
+        codexSubagentClassifier: {}, isAgentEnabled: () => true,
+        getStateRuntime: () => harness.state,
+        updateSession: (...args) => harness.state.updateSession(...args),
+        showCodexUserInputBubble: () => true,
+      });
+      const rawSessionId = "codex:question-collision";
+      const sessionId = localSessionKey(rawSessionId);
+      try {
+        runtime.updateSessionFromServer(sessionId, "thinking", "UserPromptSubmit", {
+          agentId: "codex", hookSource: "codex-official", profileId: "local",
+          rawSessionId, turnId: "A", ...provenance,
+        });
+        const before = harness.state.sessions.get(sessionId).updatedAt;
+        runtime.startCodexLogMonitor().options.onUserInputRequest(rawSessionId, {
+          callId: "question-1",
+          questions: [{ id: "choice", header: "Choice", question: "Continue?", options: [] }],
+          autoResolutionMs: null,
+        }, {
+          turnId: "A", userInputReplay: true, sourcePid: 42, agentPid: 42, cwd: "/repo",
+          planProgress: { completed: 2, total: 4 }, planProgressTurnId: "A",
+        });
+        const session = harness.state.sessions.get(sessionId);
+        assert.equal(session.planProgress, null);
+        assert.equal(session.updatedAt, before);
+        for (const [key, value] of Object.entries(provenance)) assert.equal(session[key], value);
+      } finally {
+        runtime.cleanup();
+        harness.state.cleanup();
+      }
+    });
+  }
+
   it("recovers a pending Codex question's matching plan after the session card is created", () => {
     const instances = [];
     const harness = makeRealStateHarness();
@@ -2261,25 +2305,31 @@ describe("agent-runtime-main", () => {
       planProgress: { completed: 2, total: 4, percent: 50 },
       planProgressTurnId: "question-turn",
     };
+    const questions = [{ id: "choice", header: "Choice", question: "Continue?", options: [] }];
     try {
       const monitor = runtime.startCodexLogMonitor();
       // Backfill's metadata-only event arrives before the card exists.
       monitor.emit(rawSessionId, "idle", "event_msg:token_count", extra);
       assert.strictEqual(harness.state.sessions.has(sessionId), false);
       monitor.options.onUserInputRequest(rawSessionId, {
-        callId: "call1", questions: [], autoResolutionMs: null,
+        callId: "call1", questions, autoResolutionMs: null,
       }, extra);
       assert.strictEqual(shown.length, 1);
       assert.deepStrictEqual(harness.state.sessions.get(sessionId).planProgress,
         { completed: 2, total: 4, percent: 50 });
       assert.equal(Object.hasOwn(harness.state.sessions.get(sessionId), "codexTurnId"), false);
+      monitor.options.onUserInputRequest(rawSessionId, {
+        callId: "call-next", questions, autoResolutionMs: null,
+      }, { ...extra, planProgress: { completed: 3, total: 4 } });
+      assert.deepStrictEqual(harness.state.sessions.get(sessionId).planProgress,
+        { completed: 3, total: 4, percent: 75 });
       // A pending question referencing an older turn cannot take a newer
       // checklist even though both events share the same session key.
       monitor.options.onUserInputRequest(rawSessionId, {
-        callId: "call2", questions: [], autoResolutionMs: null,
+        callId: "call2", questions, autoResolutionMs: null,
       }, { ...extra, turnId: "old-turn" });
       assert.deepStrictEqual(harness.state.sessions.get(sessionId).planProgress,
-        { completed: 2, total: 4, percent: 50 });
+        { completed: 3, total: 4, percent: 75 });
     } finally {
       runtime.cleanup();
       harness.state.cleanup();

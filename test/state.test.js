@@ -4178,6 +4178,57 @@ describe("updateSession()", () => {
     assert.equal(api.sessions.get("claude:plan").planProgress, null);
   });
 
+  for (const transientPermissionEvent of [false, true]) {
+    it(`preserves Codex plan progress through PermissionRequest (transient=${transientPermissionEvent})`, () => {
+      const sid = "codex:permission-plan";
+      const options = { agentId: "codex", turnId: "A", sourcePid: 42, cwd: "/repo" };
+      const plan = { completed: 1, total: 3, percent: 33 };
+      api.updateSession(sid, "working", "PreToolUse", options);
+      api.updateSessionMetadata(sid, {
+        expectedAgentId: "codex", planProgress: plan, planProgressTurnId: "A",
+      });
+
+      api.updateSession(sid, "notification", "PermissionRequest", {
+        ...options, transientPermissionEvent,
+        // A permission focus refresh cannot replace the accepted checklist
+        // or take turn ownership, even if it carries newer-looking metadata.
+        turnId: "B", planProgress: { completed: 3, total: 3 }, planProgressTurnId: "B",
+      });
+      assert.deepStrictEqual(api.sessions.get(sid).planProgress, plan);
+      assert.deepStrictEqual(api.buildSessionSnapshot().sessions.find((s) => s.id === sid).planProgress, plan);
+      assert.equal(api.sessions.get(sid).state, "working");
+      api.updateSession(sid, "working", "PostToolUse", options);
+      assert.deepStrictEqual(api.sessions.get(sid).planProgress, plan);
+
+      // An authoritative all-null focus result also rebuilds this record.
+      api.updateSession(sid, "notification", "PermissionRequest", {
+        agentId: "codex", replaceProcessMetadata: true, transientPermissionEvent,
+      });
+      assert.deepStrictEqual(api.sessions.get(sid).planProgress, plan);
+      assert.equal(api.sessions.get(sid).sourcePid, null);
+      api.updateSessionMetadata(sid, {
+        expectedAgentId: "codex", planProgress: { completed: 2, total: 3 }, planProgressTurnId: "B",
+      });
+      assert.deepStrictEqual(api.sessions.get(sid).planProgress, plan);
+
+      api.updateSession(sid, "thinking", "UserPromptSubmit", { ...options, turnId: "B" });
+      assert.equal(api.sessions.get(sid).planProgress, null);
+      api.updateSessionMetadata(sid, {
+        expectedAgentId: "codex", planProgress: plan, planProgressTurnId: "A",
+      });
+      assert.equal(api.sessions.get(sid).planProgress, null);
+    });
+  }
+
+  it("does not seed a new Codex permission row with unaccepted plan metadata", () => {
+    api.updateSession("codex:new-permission", "notification", "PermissionRequest", {
+      agentId: "codex", sourcePid: 42, cwd: "/repo", turnId: "A",
+      planProgress: { completed: 1, total: 3 }, planProgressTurnId: "A",
+    });
+    assert.equal(api.sessions.get("codex:new-permission").planProgress, null);
+    assert.equal(api.sessions.get("codex:new-permission").state, "idle");
+  });
+
   it("keeps a statusline window authoritative while transcript events refresh only used tokens", () => {
     update(api, {
       id: "s1",
