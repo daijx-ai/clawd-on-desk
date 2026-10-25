@@ -4150,6 +4150,9 @@ describe("updateSession()", () => {
     assert.deepStrictEqual(session.planProgress, { completed: 1, total: 3, percent: 33 });
     assert.equal(session.updatedAt, 12345);
     assert.equal(JSON.stringify(session.recentEvents), recentEventsBefore);
+    assert.equal(Object.hasOwn(session, "codexTurnId"), false);
+    assert.equal(Object.hasOwn(session, "turnId"), false);
+    assert.doesNotMatch(JSON.stringify(api.buildSessionSnapshot()), /"codexTurnId"|"planProgressTurnId"/);
     assert.equal(api.updateSessionMetadata("codex:plan", {
       expectedAgentId: "claude-code",
       planProgress: { completed: 3, total: 3 },
@@ -4158,7 +4161,8 @@ describe("updateSession()", () => {
     assert.equal(session.planProgress.percent, 33);
 
     api.updateSession("codex:plan", "thinking", "event_msg:task_started", { agentId: "codex", turnId: "B" });
-    assert.equal(api.sessions.get("codex:plan").codexTurnId, "B");
+    assert.equal(Object.hasOwn(api.sessions.get("codex:plan"), "codexTurnId"), false,
+      "Codex turn ownership must remain runtime-private, not on a session");
     assert.equal(api.sessions.get("codex:plan").planProgress, null);
     api.updateSessionMetadata("codex:plan", {
       expectedAgentId: "codex",

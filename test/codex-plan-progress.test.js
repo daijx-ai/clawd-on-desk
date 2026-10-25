@@ -74,3 +74,33 @@ test("Codex JSONL carries a plan, preserves it at turn end, and clears it on the
     monitor.stop();
   }
 });
+
+test("pending request_user_input startup replay carries only its own turn's checklist", () => {
+  const shown = [];
+  const monitor = new CodexLogMonitor({
+    ...codexConfig,
+    logConfig: { ...codexConfig.logConfig, sessionDir: path.join(os.tmpdir(), "codex-plan-progress-replay") },
+  }, () => {}, { onUserInputRequest: (...args) => shown.push(args) });
+  monitor._findCodexWriterPid = () => null;
+  const tracked = {
+    sessionId: "codex:replayed-question",
+    cwd: "/repo", planProgress: { completed: 2, total: 4, percent: 50 },
+    planProgressTurnId: "turn-B", isSubagent: false,
+    pendingUserInputs: new Map([
+      ["q-B", { callId: "q-B", questions: [], activity: { turnId: "turn-B", userInputReplay: true } }],
+      ["q-A", { callId: "q-A", questions: [], activity: { turnId: "turn-A", userInputReplay: true } }],
+    ]),
+  };
+  try {
+    monitor._emitPendingUserInputRequests(tracked);
+    assert.equal(shown.length, 2);
+    assert.equal(shown[0][2].turnId, "turn-B");
+    assert.deepEqual(shown[0][2].planProgress, tracked.planProgress);
+    assert.equal(shown[0][2].planProgressTurnId, "turn-B");
+    assert.equal(shown[1][2].turnId, "turn-A");
+    assert.equal(Object.hasOwn(shown[1][2], "planProgress"), false,
+      "a stale unanswered request may not inherit another turn's progress");
+  } finally {
+    monitor.stop();
+  }
+});

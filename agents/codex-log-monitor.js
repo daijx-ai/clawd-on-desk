@@ -2135,6 +2135,8 @@ class CodexLogMonitor {
   _emitUserInputRequest(tracked, request) {
     if (!this._onUserInputRequest || this._isTrackedSubagent(tracked)) return;
     const agentPid = this._resolveTrackedAgentPid(tracked);
+    const questionTurnId = normalizeCodexTurnId(request && request.activity && request.activity.turnId);
+    const planTurnId = normalizeCodexTurnId(tracked.planProgressTurnId);
     this._onUserInputRequest(tracked.sessionId, request, {
       ...(request.activity || { userInputReplay: true }),
       cwd: tracked.cwd,
@@ -2144,6 +2146,10 @@ class CodexLogMonitor {
       codexOriginator: tracked.codexOriginator || null,
       codexSource: tracked.codexSource || null,
       ...(tracked.contextUsage ? { contextUsage: tracked.contextUsage } : {}),
+      // Never attach a plan from a newer turn to an older open question.
+      ...(questionTurnId && questionTurnId === planTurnId
+        ? { planProgress: tracked.planProgress || null, planProgressTurnId: planTurnId }
+        : {}),
       headless: false,
     });
   }

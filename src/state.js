@@ -209,6 +209,9 @@ function hasCodexCompactionVisual() {
 }
 
 const sessions = new Map();
+// The owner of a Codex plan belongs to the state runtime, not a session or
+// its snapshot. Clearing an evicted session also discards its turn ownership.
+const codexSessionTurnIds = new Map();
 const claudeToolPhases = createClaudeToolPhaseLedger();
 // Account-wide rate-limit quota, keyed by reporting source — deliberately
 // NOT session state (see src/state-account-quota.js). Persistence is
@@ -1728,11 +1731,12 @@ function updateSessionMetadata(sessionId, opts = {}) {
   if (!incomingContextUsage && !clearContextUsage && !incomingTitle && !incomingModel
     && !hasPlanProgress) return false;
   let applied = false;
-  const currentCodexTurnId = normalizeCodexTurnId(session.codexTurnId);
-  const planTurnMatches = !currentCodexTurnId || currentCodexTurnId === incomingPlanProgressTurnId;
+  const currentCodexTurnId = codexSessionTurnIds.get(id) || null;
+  const planTurnMatches = !!incomingPlanProgressTurnId
+    && (!currentCodexTurnId || currentCodexTurnId === incomingPlanProgressTurnId);
   if (hasPlanProgress && hasPlanProgressTurnId && session.agentId === "codex" && planTurnMatches) {
     if (!currentCodexTurnId && incomingPlanProgressTurnId) {
-      session.codexTurnId = incomingPlanProgressTurnId;
+      codexSessionTurnIds.set(id, incomingPlanProgressTurnId);
       applied = true;
     }
     if (JSON.stringify(session.planProgress || null) !== JSON.stringify(incomingPlanProgress)) {
@@ -1976,6 +1980,7 @@ function clearAllClaudeTranscriptCompletionProbes() {
 function deleteSessionWithCompletionCleanup(sessionId, reason) {
   releaseCodexCompaction(sessionId);
   codexCompactionCompletions.delete(sessionId);
+  codexSessionTurnIds.delete(sessionId);
   cancelCompletionDebounce(sessionId, reason);
   cancelClaudeTranscriptCompletionProbe(sessionId, reason);
   return sessions.delete(sessionId);
@@ -2684,11 +2689,12 @@ function updateSession(sessionId, state, event, opts = {}) {
     ? null
     : (startsNewCodexTurn
       ? normalizedCodexTurnId
-      : (normalizedCodexTurnId || (existing && existing.codexTurnId) || null));
+      : (codexSessionTurnIds.get(sessionId) || normalizedCodexTurnId));
   const normalizedPlanProgressTurnId = planProgressTurnId === undefined
     ? normalizedCodexTurnId
     : normalizeCodexTurnId(planProgressTurnId);
-  const planProgressTurnMatches = normalizedPlanProgressTurnId === srcCodexTurnId;
+  const planProgressTurnMatches = !!normalizedPlanProgressTurnId
+    && normalizedPlanProgressTurnId === srcCodexTurnId;
   const srcPlanProgress = srcAgentId !== "codex"
     ? null
     : (startsNewCodexTurn
@@ -2696,6 +2702,13 @@ function updateSession(sessionId, state, event, opts = {}) {
       : (normalizedPlanProgress === undefined
         ? (existing && existing.planProgress) || null
         : (planProgressTurnMatches ? normalizedPlanProgress : (existing && existing.planProgress) || null)));
+  // Only accepted lifecycle traffic may change the private turn owner.
+  // An id-less new turn clears the old checklist and its ownership.
+  if (srcAgentId === "codex" && srcCodexTurnId) {
+    codexSessionTurnIds.set(sessionId, srcCodexTurnId);
+  } else if (srcAgentId !== "codex" || startsNewCodexTurn) {
+    codexSessionTurnIds.delete(sessionId);
+  }
   const incomingAssistantLastOutput = normalizeAssistantOutput(assistantLastOutput);
   const srcAssistantLastOutput = incomingAssistantLastOutput;
   const srcAssistantLastOutputTruncated = !!(
@@ -2990,7 +3003,7 @@ function updateSession(sessionId, state, event, opts = {}) {
     clearSubagentTracker(subagentTracker);
   }
 
-  const base = { sourcePid: srcPid, wtHwnd: srcWtHwnd, cwd: srcCwd, editor: srcEditor, pidChain: srcPidChain, tmuxSocket: srcTmuxSocket, tmuxClient: srcTmuxClient, orcaPaneKey: srcOrcaPaneKey, herdrPaneId: srcHerdr.herdrPaneId, herdrSocket: srcHerdr.herdrSocket, agentPid: srcAgentPid, agentId: srcAgentId, profileId: (existing && existing.profileId) || profileId || "local", rawSessionId: (existing && existing.rawSessionId) || rawSessionId || sessionId, sessionAutomationIdentity: srcSessionAutomationIdentity, host: srcHost, wslDistro: srcWslDistro, headless: srcHeadless, platform: srcPlatform, model: srcModel, provider: srcProvider, codexOriginator: srcCodexOriginator, codexSource: srcCodexSource, codexTurnId: srcCodexTurnId, dshCarrier: srcDshCarrier, ghosttyTerminalId: srcGhosttyTerminalId, sessionTitle: srcSessionTitle, sessionTitleFromPrompt: srcSessionTitleFromPrompt, contextUsage: srcContextUsage, contextUsageOrigin: srcContextUsageOrigin, planProgress: srcPlanProgress, metadataUpdatedAt: srcMetadataUpdatedAt, assistantLastOutput: srcAssistantLastOutput, assistantLastOutputTruncated: srcAssistantLastOutputTruncated, lastToolName: srcToolName, transcriptPath: srcTranscriptPath, recentEvents, pidReachable, lastToolBoundaryAt: srcLastToolBoundaryAt, lastStopAt: srcLastStopAt, awaitingInputSinceStop: resolveAwaitingInputSinceStop(existing, event), muteNotificationSound: state === "notification" && muteNotificationSound === true, claudeBackgroundSubagentHoldAt };
+  const base = { sourcePid: srcPid, wtHwnd: srcWtHwnd, cwd: srcCwd, editor: srcEditor, pidChain: srcPidChain, tmuxSocket: srcTmuxSocket, tmuxClient: srcTmuxClient, orcaPaneKey: srcOrcaPaneKey, herdrPaneId: srcHerdr.herdrPaneId, herdrSocket: srcHerdr.herdrSocket, agentPid: srcAgentPid, agentId: srcAgentId, profileId: (existing && existing.profileId) || profileId || "local", rawSessionId: (existing && existing.rawSessionId) || rawSessionId || sessionId, sessionAutomationIdentity: srcSessionAutomationIdentity, host: srcHost, wslDistro: srcWslDistro, headless: srcHeadless, platform: srcPlatform, model: srcModel, provider: srcProvider, codexOriginator: srcCodexOriginator, codexSource: srcCodexSource, dshCarrier: srcDshCarrier, ghosttyTerminalId: srcGhosttyTerminalId, sessionTitle: srcSessionTitle, sessionTitleFromPrompt: srcSessionTitleFromPrompt, contextUsage: srcContextUsage, contextUsageOrigin: srcContextUsageOrigin, planProgress: srcPlanProgress, metadataUpdatedAt: srcMetadataUpdatedAt, assistantLastOutput: srcAssistantLastOutput, assistantLastOutputTruncated: srcAssistantLastOutputTruncated, lastToolName: srcToolName, transcriptPath: srcTranscriptPath, recentEvents, pidReachable, lastToolBoundaryAt: srcLastToolBoundaryAt, lastStopAt: srcLastStopAt, awaitingInputSinceStop: resolveAwaitingInputSinceStop(existing, event), muteNotificationSound: state === "notification" && muteNotificationSound === true, claudeBackgroundSubagentHoldAt };
   // Desktop apps can reopen a previous conversation on launch, so SessionStart
   // only means "opened" — not "used". Any other lifecycle event is a real action
   // and clears the marker. Only the listed agents carry the field; others are
@@ -4067,6 +4080,7 @@ function getStartupRecoveryActive() { return startupRecoveryActive; }
 function cleanup() {
   for (const id of codexCompactionHolds.keys()) releaseCodexCompaction(id);
   codexCompactionCompletions.clear();
+  codexSessionTurnIds.clear();
   // The persist debounce timer is unref'd, so a quota update inside the
   // final debounce window before quit would otherwise never reach disk
   // (main.js before-quit calls this cleanup).

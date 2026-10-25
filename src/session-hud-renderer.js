@@ -366,18 +366,6 @@ function createRowForSession(session, now) {
     hasRightContent = true;
   }
 
-  if (!feedbackText && session.planProgress) {
-    const chip = document.createElement("span");
-    chip.className = "state-chip";
-    const plan = session.planProgress;
-    chip.textContent = t("codexPlanProgress")
-      .replace("{completed}", plan.completed)
-      .replace("{total}", plan.total)
-      .replace("{percent}", plan.percent);
-    right.appendChild(chip);
-    hasRightContent = true;
-  }
-
   const usageInfo = feedbackText ? null : usageChipInfo(session);
   if (usageInfo && usageInfo.label) {
     const chip = document.createElement("span");
@@ -400,6 +388,25 @@ function createRowForSession(session, now) {
 
   row.appendChild(left);
   if (hasRightContent) row.appendChild(right);
+
+  if (!feedbackText && session.planProgress) {
+    const plan = session.planProgress;
+    const progressText = t("codexPlanProgress")
+      .replace("{completed}", plan.completed)
+      .replace("{total}", plan.total)
+      .replace("{percent}", plan.percent);
+    // An absolute 2px overlay uses no horizontal flex space, including at
+    // 160% HUD scale. The full steps/percentage stay available on hover.
+    const track = document.createElement("div");
+    track.className = "plan-progress-track";
+    track.setAttribute("aria-label", progressText);
+    const fill = document.createElement("div");
+    fill.className = "plan-progress-fill";
+    fill.style.width = String(Math.max(0, Math.min(100, plan.percent))) + "%";
+    track.appendChild(fill);
+    row.appendChild(track);
+    row.title = row.title ? row.title + " · " + progressText : progressText;
+  }
 
   row.addEventListener("click", () => {
     unreadSessions.delete(session.id);

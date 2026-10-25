@@ -1261,15 +1261,6 @@ function appendMeta(main, session, now) {
     recoveryBadge.textContent = t("sessionRecovered");
     meta.appendChild(recoveryBadge);
   }
-  if (session.planProgress) {
-    const plan = session.planProgress;
-    const progress = createText("span", "badge", t("codexPlanProgress")
-      .replace("{completed}", plan.completed)
-      .replace("{total}", plan.total)
-      .replace("{percent}", plan.percent));
-    meta.appendChild(document.createTextNode(" · "));
-    meta.appendChild(progress);
-  }
   // Source badge: show where this session runs (WSL, SSH)
   if (session.sourceType && session.sourceType !== "local") {
     meta.appendChild(document.createTextNode(" · "));
@@ -1310,6 +1301,16 @@ function appendModel(main, session) {
   const row = createText("div", "model-row", `${t("dashboardModel")}: ${session.model}`);
   row.title = session.model;
   main.appendChild(row);
+}
+
+function appendPlanProgress(main, session) {
+  if (!session.planProgress) return;
+  const plan = session.planProgress;
+  const text = t("codexPlanProgress")
+    .replace("{completed}", plan.completed)
+    .replace("{total}", plan.total)
+    .replace("{percent}", plan.percent);
+  main.appendChild(createText("div", "plan-progress-row", text));
 }
 
 function appendContextUsage(main, session) {
@@ -1429,6 +1430,7 @@ function createCard(session, now) {
   main.className = "main";
   main.appendChild(createTitle(session));
   appendMeta(main, session, now);
+  appendPlanProgress(main, session);
   appendPath(main, session);
   appendModel(main, session);
   appendEvent(main, session, now);

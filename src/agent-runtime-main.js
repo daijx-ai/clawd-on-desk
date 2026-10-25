@@ -913,16 +913,23 @@ function createAgentRuntimeMain(options = {}) {
             && Object.prototype.hasOwnProperty.call(sessionOptions, "planProgress");
           const planTurnId = normalizeCodexTurnId(sessionOptions.planProgressTurnId);
           const fenceSnapshot = codexTurnFence.getSnapshot(sessionId);
+          // Stop clears currentTurnId but retains the just-closed turn in the
+          // terminal latch. Plan metadata may update that turn, never reopen it.
+          const ownerTurnId = fenceSnapshot
+            && (fenceSnapshot.currentTurnId || (fenceSnapshot.terminalLatch && fenceSnapshot.terminalLatch.turnId));
           if (planProgressAllowed) {
-            if (event === "event_msg:token_count" && !planTurnId) {
-              planProgressAllowed = false;
-            } else if (planTurnId && fenceSnapshot
-              && (fenceSnapshot.terminalLatch || fenceSnapshot.currentTurnId !== planTurnId)) {
+            if (!planTurnId || (fenceSnapshot && ownerTurnId !== planTurnId)) {
               planProgressAllowed = false;
             }
           }
-          if (!sessionOptions.contextUsage && !planProgressAllowed) return false;
           const stateRuntime = getStateRuntime();
+          // JSONL runs on this machine. Never annotate a WSL/remote Codex row
+          // that reused the same raw session ID as a local transcript.
+          const existing = stateRuntime?.sessions?.get(sessionId);
+          if (planProgressAllowed && existing && !isLocalCodexSessionRecord(existing)) {
+            planProgressAllowed = false;
+          }
+          if (!sessionOptions.contextUsage && !planProgressAllowed) return false;
           if (!stateRuntime || typeof stateRuntime.updateSessionMetadata !== "function") return false;
           return stateRuntime.updateSessionMetadata(sessionId, {
             contextUsage: sessionOptions.contextUsage,
@@ -999,7 +1006,10 @@ function createAgentRuntimeMain(options = {}) {
           ) {
             recordCodexWebSearchRecapOnly(sessionIdentity, sessionOptions, event, extra);
           }
-          annotateCodexMetadata({ includePlanProgress: false });
+          annotateCodexMetadata({
+            includePlanProgress: ["closed-turn-id", "terminal-latch", "duplicate-terminal"]
+              .includes(fenceDecision.reason),
+          });
           annotateCodexAccountQuota();
           return;
         }
@@ -1042,8 +1052,9 @@ function createAgentRuntimeMain(options = {}) {
             ...extra,
           });
           if (!shown) return;
+          const userInputOptions = buildCodexMonitorSessionOptions(extra, { includeHeadless: true });
           updateSession(sessionId, "notification", "CodexUserInputRequest", {
-            ...buildCodexMonitorSessionOptions(extra, { includeHeadless: true }),
+            ...userInputOptions,
             profileId: sessionIdentity.profileId,
             rawSessionId: sessionIdentity.rawSessionId,
             transientPermissionEvent: true,
@@ -1052,6 +1063,18 @@ function createAgentRuntimeMain(options = {}) {
             // this UI event must never enter recap with receipt time.
             recapSuppressed: true,
           });
+          // On startup, replay's metadata-only snapshot arrives before the
+          // pending question creates a session. Apply its matching-turn plan
+          // only after the question card exists.
+          const questionTurnId = normalizeCodexTurnId(userInputOptions.turnId);
+          if (questionTurnId && questionTurnId === normalizeCodexTurnId(userInputOptions.planProgressTurnId)
+            && Object.prototype.hasOwnProperty.call(userInputOptions, "planProgress")) {
+            getStateRuntime()?.updateSessionMetadata?.(sessionId, {
+              expectedAgentId: "codex",
+              planProgress: userInputOptions.planProgress,
+              planProgressTurnId: questionTurnId,
+            });
+          }
         },
         onUserInputResolved: (sid, callId, resolution = null) => {
           const sessionId = resolveSessionIdentity(sid, "local").sessionId;
