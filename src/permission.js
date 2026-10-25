@@ -17,7 +17,6 @@ const { redactSecrets } = require("./secret-redact");
 const path = require("path");
 const http = require("http");
 const crypto = require("crypto");
-const { timingSafeEqual } = crypto;
 const {
   CLAWD_SERVER_HEADER,
   CLAWD_SERVER_ID,
@@ -27,10 +26,16 @@ const { getAgent } = require("../agents/registry");
 const { isPassiveNotifyEntry } = require("./passive-notify-entry");
 const { validateQuestionAnswers } = require("./agent-question-wire");
 const { reminderHolds } = require("./permission-reminder");
+const { isPermissionReviewEnabled } = require("./permission-review");
+const { reviewStampAllows } = require("./permission-review-command");
 const {
   normalizeOpencodeFamilyBridgeUrl,
   isValidOpencodeFamilyBridgeToken,
 } = require("./opencode-family-bridge-url");
+const {
+  normalizeExternalFamilyPermissionIdentity,
+  opencodeFamilyBridgeTokensEqual,
+} = require("./opencode-family-permission-identity");
 const {
   PERMISSION_AUTOMATION_MODE,
   INTERACTION_INTENT,
@@ -2440,6 +2445,39 @@ function permissionReminderHolds(permEntry) {
   return result;
 }
 
+// External review command (#995): "should an automatic allow for this request
+// stop at a human because the user's review gate did not clear it?".
+//
+// The verdict itself is computed once, at the route boundary, and frozen on
+// the entry as permissionReview. This function only answers whether that
+// frozen verdict still blocks automation. Same scoping and freeze semantics as
+// permissionReminderHolds():
+//   - only ordinary tool requests (the only branch policy applies it to);
+//   - the first answer is cached on the entry, so a card that was rendered as
+//     held can never become sweep-resolvable without a human action;
+//   - an unreadable setting falls back to the stamp -- and only an explicit
+//     {hold:false} stamp allows, so a missing or malformed stamp holds.
+function permissionReviewHolds(permEntry) {
+  if (!isValidInteraction(permEntry && permEntry.interaction)) return false;
+  const intent = permEntry.interaction.intent;
+  if (intent !== INTERACTION_INTENT.TOOL_APPROVAL && intent !== INTERACTION_INTENT.UNKNOWN) {
+    return false;
+  }
+  if (typeof permEntry._reviewHoldAtAccept === "boolean") {
+    return permEntry._reviewHoldAtAccept;
+  }
+  let enabled;
+  try {
+    enabled = isPermissionReviewEnabled(ctx);
+  } catch (err) {
+    permLog(`external review: setting read failed (${err && err.message ? err.message : err}); falling back to the stamp`);
+    enabled = true;
+  }
+  const result = enabled ? !reviewStampAllows(permEntry.permissionReview) : false;
+  permEntry._reviewHoldAtAccept = result;
+  return result;
+}
+
 // Whether the reminder is the reason this request is in front of a human.
 //
 // permissionReminderHolds() answers "should automation stop here"; this answers
@@ -2490,6 +2528,7 @@ function reminderIsWhyThisIsPending(permEntry) {
     interaction: permEntry.interaction,
     entry: permEntry,
     reminderHold: false,
+    reviewHold: false,
   }) === AUTOMATION_ACTION.AUTO_ALLOW;
   if (!wouldAutoAllow) return false;
 
@@ -2498,7 +2537,48 @@ function reminderIsWhyThisIsPending(permEntry) {
   const needsLiveGate = hasSessionOverride || isInteractiveCodexSubagentEntry(permEntry);
   if (!needsLiveGate) return true;
 
-  return canAutoResolvePendingPermission(permEntry, { mode, ignoreReminderHold: true }) === true;
+  return canAutoResolvePendingPermission(permEntry, {
+    mode,
+    ignoreReminderHold: true,
+    ignoreReviewHold: true,
+  }) === true;
+}
+
+// Same question for the external review command: is the review what turned an
+// otherwise-automatic allow into a card? The answer is intentionally "did the
+// hold change anything", not "is a review stamp present" -- a request that was
+// reaching a human regardless must not claim the review stopped it.
+function reviewIsWhyThisIsPending(permEntry) {
+  if (!permissionReviewHolds(permEntry)) return false;
+  let mode;
+  if (typeof ctx.getEffectivePermissionAutomationMode === "function") {
+    mode = ctx.getEffectivePermissionAutomationMode(permEntry, {
+      sessionOnly: permEntry.remoteOnly === true,
+    });
+  } else if (typeof ctx.getPermissionAutomationMode === "function") {
+    mode = ctx.getPermissionAutomationMode();
+  } else {
+    mode = PERMISSION_AUTOMATION_MODE.OFF;
+  }
+  const wouldAutoAllow = evaluatePermissionAutomation({
+    mode,
+    interaction: permEntry.interaction,
+    entry: permEntry,
+    reminderHold: false,
+    reviewHold: false,
+  }) === AUTOMATION_ACTION.AUTO_ALLOW;
+  if (!wouldAutoAllow) return false;
+
+  const hasSessionOverride = typeof ctx.hasSessionAutomationOverride === "function"
+    && ctx.hasSessionAutomationOverride(permEntry);
+  const needsLiveGate = hasSessionOverride || isInteractiveCodexSubagentEntry(permEntry);
+  if (!needsLiveGate) return true;
+
+  return canAutoResolvePendingPermission(permEntry, {
+    mode,
+    ignoreReminderHold: true,
+    ignoreReviewHold: true,
+  }) === true;
 }
 
 function canAutoResolvePendingPermission(permEntry, options = {}) {
@@ -2557,18 +2637,23 @@ function canAutoResolvePendingPermission(permEntry, options = {}) {
         );
   }
 
-  // ignoreReminderHold lets reminderIsWhyThisIsPending() ask "would every
-  // OTHER gate have let this through" without re-implementing them: it is
-  // the neutralize-only-the-reminder-hold view onto this exact predicate.
+  // ignoreReminderHold/ignoreReviewHold let the "...IsWhyThisIsPending"
+  // predicates ask "would every OTHER gate have let this through" without
+  // re-implementing them: they are the neutralize-only-that-hold view onto
+  // this exact predicate.
   const reminderHold = options.ignoreReminderHold === true
     ? false
     : permissionReminderHolds(permEntry);
+  const reviewHold = options.ignoreReviewHold === true
+    ? false
+    : permissionReviewHolds(permEntry);
 
   return evaluatePermissionAutomation({
     mode,
     interaction: permEntry.interaction,
     entry: permEntry,
     reminderHold,
+    reviewHold,
   }) === AUTOMATION_ACTION.AUTO_ALLOW;
 }
 
@@ -2592,6 +2677,33 @@ function buildAutoApproveElicitationAnswers(toolInput) {
   return answers;
 }
 
+// Codex Auto routing hands remote/WSL requests back to Codex because their
+// transcript is not readable here. A user who turned on global automation
+// still expects Clawd to allow those tool requests, as Intercept did before
+// Auto (#1186). The route asks this
+// before claiming such a request: only an immediate global auto-allow
+// qualifies. Session overrides and interactive subagents need the live gate
+// on a real pending entry, and a held or deferred request must stay with
+// Codex rather than open a bubble Auto promised not to show.
+function wouldAutoAllowPermission(permEntry) {
+  if (!permEntry || isPassiveNotifyEntry(permEntry)) return false;
+  if (typeof ctx.getEffectivePermissionAutomationMode !== "function"
+    && typeof ctx.getPermissionAutomationMode !== "function") return false;
+  if (typeof ctx.hasSessionAutomationOverride === "function"
+    && ctx.hasSessionAutomationOverride(permEntry)) return false;
+  if (isInteractiveCodexSubagentEntry(permEntry)) return false;
+  const mode = typeof ctx.getEffectivePermissionAutomationMode === "function"
+    ? ctx.getEffectivePermissionAutomationMode(permEntry, { sessionOnly: false })
+    : ctx.getPermissionAutomationMode();
+  return evaluatePermissionAutomation({
+    mode,
+    interaction: permEntry.interaction,
+    entry: permEntry,
+    reminderHold: permissionReminderHolds(permEntry),
+    reviewHold: permissionReviewHolds(permEntry),
+  }) === AUTOMATION_ACTION.AUTO_ALLOW;
+}
+
 function maybeAutoApprovePermission(permEntry) {
   if (!permEntry) return false;
   if (isPassiveNotifyEntry(permEntry)) return false;
@@ -2603,14 +2715,18 @@ function maybeAutoApprovePermission(permEntry) {
           : PERMISSION_AUTOMATION_MODE.OFF
       );
   const reminderHold = permissionReminderHolds(permEntry);
+  const reviewHold = permissionReviewHolds(permEntry);
   const action = evaluatePermissionAutomation({
     mode,
     interaction: permEntry.interaction,
     entry: permEntry,
     reminderHold,
+    reviewHold,
   });
   if (action === AUTOMATION_ACTION.DEFER) {
-    if (reminderHold) {
+    if (reviewHold) {
+      permLog(`external review: holding for a human mode=${mode} reason=${permEntry.permissionReview && permEntry.permissionReview.tag} tool=${permEntry.toolName || "(missing)"} session=${permEntry.sessionId} agent=${permEntry.agentId || "unknown"}`);
+    } else if (reminderHold) {
       permLog(`destructive reminder: holding for a human mode=${mode} reason=${permEntry.permissionReminder.tag} tool=${permEntry.toolName || "(missing)"} session=${permEntry.sessionId} agent=${permEntry.agentId || "unknown"}`);
     } else if (!isValidInteraction(permEntry.interaction)) {
       permLog(`automation defer: invalid interaction tool=${permEntry.toolName} session=${permEntry.sessionId} agent=${permEntry.agentId || "unknown"}`);
@@ -2680,6 +2796,18 @@ function handlePermissionBubbleFailure(permEntry, reason) {
 function showPermissionBubble(permEntry) {
   // Auto-pilot: if enabled, approve immediately and never render a bubble.
   if (maybeAutoApprovePermission(permEntry)) return;
+  // Claimed only for automation (see wouldAutoAllowPermission). If settings
+  // changed since the route asked, give the request back to Codex.
+  if (permEntry.codexAutomationClaim === true) {
+    permLog(`codex automation claim no longer applies -> no decision, native prompt fallback (tool=${permEntry.toolName})`);
+    resolvePermissionEntry(
+      permEntry,
+      "no-decision",
+      "Automation no longer applies",
+      resolutionOptions("cancelled", false)
+    );
+    return;
+  }
   ensureBubblePresentationState(permEntry);
   ensurePermissionUiIdentity(permEntry);
 
@@ -3036,6 +3164,7 @@ function buildPermissionBubblePayload(permEntry) {
   const sessionShortId = permEntry.sessionId
     ? String(permEntry.sessionId).slice(-3)
     : null;
+  const reviewIsReason = reviewIsWhyThisIsPending(permEntry);
   return {
     toolName: permEntry.toolName,
     toolInput: permEntry.toolInput,
@@ -3046,6 +3175,19 @@ function buildPermissionBubblePayload(permEntry) {
     reminderTag: reminderIsWhyThisIsPending(permEntry)
       ? permEntry.permissionReminder.tag
       : null,
+    // The external review command's reason for the same badge. `reviewNote`
+    // is the command's last stdout line, already bounded and control-stripped
+    // in the main process. `reviewWarning` is exit code 2's "worth a closer
+    // look" bit; the renderer shows it as an extra clause on the badge.
+    reviewTag: reviewIsReason ? "external-review" : null,
+    reviewNote: reviewIsReason
+      && permEntry.permissionReview
+      && typeof permEntry.permissionReview.note === "string"
+      ? permEntry.permissionReview.note
+      : null,
+    reviewWarning: reviewIsReason
+      && permEntry.permissionReview
+      && permEntry.permissionReview.warning === true,
     detailText: typeof permEntry.detailText === "string"
       ? permEntry.detailText
       : null,
@@ -3422,12 +3564,25 @@ function buildRemoteApprovalPayload(permEntry) {
     : (reminderIsWhyThisIsPending(permEntry)
       ? interpolate(t("approvalDetailReminderValue"), "{reason}", formatReminderReason(reminderTag, ctx.lang))
       : interpolate(t("approvalDetailIrreversibleValue"), "{reason}", formatReminderReason(reminderTag, ctx.lang)));
+  // Same tiering for the external review command: the "paused" wording only
+  // when the review is what stopped an otherwise-automatic allow. A note from
+  // the command is appended verbatim (already bounded/control-stripped).
+  const reviewIsReason = reviewIsWhyThisIsPending(permEntry);
+  const reviewNote = reviewIsReason
+    && permEntry.permissionReview
+    && typeof permEntry.permissionReview.note === "string"
+    ? permEntry.permissionReview.note
+    : null;
+  const reviewLine = !reviewIsReason
+    ? null
+    : `${t("approvalDetailReviewValue")}${reviewNote ? ` — ${reviewNote}` : ""}`;
   const detail = [
     `${t("approvalDetailAgent")}: ${agentId}`,
     `${t("approvalDetailTool")}: ${toolName}`,
     sessionFolder ? `${t("approvalDetailFolder")}: ${sessionFolder}` : null,
     `${t("approvalDetailSummary")}: ${summary}`,
     reminderLine ? `${t("approvalDetailReminder")}: ${reminderLine}` : null,
+    reviewLine ? `${t("approvalDetailReview")}: ${reviewLine}` : null,
   ].filter(Boolean).join("\n");
   const fields = [
     { label: t("approvalDetailAgent"), value: agentId },
@@ -3435,6 +3590,7 @@ function buildRemoteApprovalPayload(permEntry) {
     sessionFolder ? { label: t("approvalDetailFolder"), value: sessionFolder } : null,
     { label: t("approvalDetailSummary"), value: summary },
     reminderLine ? { label: t("approvalDetailReminder"), value: reminderLine } : null,
+    reviewLine ? { label: t("approvalDetailReview"), value: reviewLine } : null,
   ].filter(Boolean);
   const suggestionButtons = buildRemoteSuggestionButtons(permEntry);
   const payload = {
@@ -5555,39 +5711,6 @@ function dismissInteractivePermissionWithoutDecision(perm, reason) {
   }
 }
 
-function opencodeFamilyBridgeTokensEqual(expected, candidate) {
-  if (
-    !isValidOpencodeFamilyBridgeToken(expected)
-    || !isValidOpencodeFamilyBridgeToken(candidate)
-  ) return false;
-  const expectedBytes = Buffer.from(expected, "utf8");
-  const candidateBytes = Buffer.from(candidate, "utf8");
-  if (expectedBytes.length !== candidateBytes.length) return false;
-  try {
-    return timingSafeEqual(expectedBytes, candidateBytes);
-  } catch {
-    return false;
-  }
-}
-
-function normalizeExternalFamilyPermissionIdentity(identity) {
-  if (!identity || typeof identity !== "object") return null;
-  const agentId = typeof identity.agentId === "string" ? identity.agentId : "";
-  if (!getFamilyConfig(agentId)) return null;
-  const requestId = typeof identity.requestId === "string" && identity.requestId
-    ? identity.requestId
-    : null;
-  const sessionId = typeof identity.sessionId === "string" && identity.sessionId
-    ? identity.sessionId
-    : null;
-  const bridgeUrl = normalizeOpencodeFamilyBridgeUrl(identity.bridgeUrl);
-  const bridgeToken = isValidOpencodeFamilyBridgeToken(identity.bridgeToken)
-    ? identity.bridgeToken
-    : null;
-  if (!requestId || !sessionId || !bridgeUrl || !bridgeToken) return null;
-  return { agentId, requestId, sessionId, bridgeUrl, bridgeToken };
-}
-
 function boundedPermissionIdentityForLog(value) {
   if (typeof value !== "string") return "(invalid)";
   const clean = value.replace(/[\u0000-\u001F\u007F-\u009F]/g, " ").trim();
@@ -5800,6 +5923,7 @@ return {
   reconcilePermissionPresentation,
   addPendingPermission, removePendingPermission,
   isPermissionEntryLive, canAutoResolvePendingPermission,
+  wouldAutoAllowPermission,
   beginSessionTrustConfirmation, endSessionTrustConfirmation,
   syncPermissionBubbleContent,
   maybeStartRemoteApproval,

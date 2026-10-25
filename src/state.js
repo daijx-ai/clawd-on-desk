@@ -41,6 +41,7 @@ const {
 } = require("./state-session-snapshot");
 const { getAgentIconUrl } = require("./state-agent-icons");
 const { resolveSessionIdentity } = require("./session-key");
+const { normalizeOpencodeAttachUrl } = require("./opencode-attach-target");
 const { normalizeTranscriptPath } = require("./transcript-path");
 const { createAccountQuotaStore } = require("./state-account-quota");
 const { normalizeQuotaGroup } = require("../hooks/quota-bucket");
@@ -1245,6 +1246,7 @@ function getSessionAliases() {
 
 function buildSessionSnapshot() {
   return buildSessionSnapshotFromSessions(sessions, {
+    t: ctx.t,
     sessionAliases: getSessionAliases(),
     getAgentIconUrl,
     resolveAgentDisplayName: ctx.resolveAgentDisplayName,
@@ -1728,8 +1730,11 @@ function updateSessionMetadata(sessionId, opts = {}) {
     : null;
   const incomingModel = typeof opts.model === "string" ? opts.model.trim() : "";
   const clearContextUsage = opts.clearContextUsage === true;
+  const hasAttachUpdate = Object.hasOwn(opts, "opencodeAttachUrl")
+    && opts.opencodeAttachSource === "opencode-plugin" && session.agentId === "opencode"
+    && (session.profileId || "local") === "local" && !session.host && !session.wslDistro && !session.headless;
   if (!incomingContextUsage && !clearContextUsage && !incomingTitle && !incomingModel
-    && !hasPlanProgress) return false;
+    && !hasPlanProgress && !hasAttachUpdate) return false;
   let applied = false;
   const currentCodexTurnId = codexSessionTurnIds.get(id) || null;
   const planTurnMatches = !!incomingPlanProgressTurnId
@@ -1741,6 +1746,14 @@ function updateSessionMetadata(sessionId, opts = {}) {
     }
     if (JSON.stringify(session.planProgress || null) !== JSON.stringify(incomingPlanProgress)) {
       session.planProgress = incomingPlanProgress;
+      applied = true;
+    }
+  }
+  if (hasAttachUpdate) {
+    const url = normalizeOpencodeAttachUrl(opts.opencodeAttachUrl);
+    if (session.opencodeAttachUrl !== url || session.opencodeAttachSource !== opts.opencodeAttachSource) {
+      session.opencodeAttachUrl = url;
+      session.opencodeAttachSource = opts.opencodeAttachSource;
       applied = true;
     }
   }
@@ -2334,6 +2347,7 @@ function updateSession(sessionId, state, event, opts = {}) {
     displayHint = undefined,
     sessionTitle = null,
     sessionTitleFromPrompt = false,
+    opencodeAttachUrl = undefined,
     contextUsage = null,
     contextUsageOrigin = null,
     planProgress = undefined,
@@ -3003,7 +3017,13 @@ function updateSession(sessionId, state, event, opts = {}) {
     clearSubagentTracker(subagentTracker);
   }
 
-  const base = { sourcePid: srcPid, wtHwnd: srcWtHwnd, cwd: srcCwd, editor: srcEditor, pidChain: srcPidChain, tmuxSocket: srcTmuxSocket, tmuxClient: srcTmuxClient, orcaPaneKey: srcOrcaPaneKey, herdrPaneId: srcHerdr.herdrPaneId, herdrSocket: srcHerdr.herdrSocket, agentPid: srcAgentPid, agentId: srcAgentId, profileId: (existing && existing.profileId) || profileId || "local", rawSessionId: (existing && existing.rawSessionId) || rawSessionId || sessionId, sessionAutomationIdentity: srcSessionAutomationIdentity, host: srcHost, wslDistro: srcWslDistro, headless: srcHeadless, platform: srcPlatform, model: srcModel, provider: srcProvider, codexOriginator: srcCodexOriginator, codexSource: srcCodexSource, dshCarrier: srcDshCarrier, ghosttyTerminalId: srcGhosttyTerminalId, sessionTitle: srcSessionTitle, sessionTitleFromPrompt: srcSessionTitleFromPrompt, contextUsage: srcContextUsage, contextUsageOrigin: srcContextUsageOrigin, planProgress: srcPlanProgress, metadataUpdatedAt: srcMetadataUpdatedAt, assistantLastOutput: srcAssistantLastOutput, assistantLastOutputTruncated: srcAssistantLastOutputTruncated, lastToolName: srcToolName, transcriptPath: srcTranscriptPath, recentEvents, pidReachable, lastToolBoundaryAt: srcLastToolBoundaryAt, lastStopAt: srcLastStopAt, awaitingInputSinceStop: resolveAwaitingInputSinceStop(existing, event), muteNotificationSound: state === "notification" && muteNotificationSound === true, claudeBackgroundSubagentHoldAt };
+  const attachSource = srcAgentId === "opencode" && hookSource === "opencode-plugin"
+    && !srcHost && !srcWslDistro && !srcHeadless && profileId === "local" ? hookSource : null;
+  const attachUrl = attachSource ? normalizeOpencodeAttachUrl(
+    opencodeAttachUrl === undefined && existing && existing.opencodeAttachSource === attachSource
+      ? existing.opencodeAttachUrl : opencodeAttachUrl
+  ) : null;
+  const base = { opencodeAttachUrl: attachUrl, opencodeAttachSource: attachSource, sourcePid: srcPid, wtHwnd: srcWtHwnd, cwd: srcCwd, editor: srcEditor, pidChain: srcPidChain, tmuxSocket: srcTmuxSocket, tmuxClient: srcTmuxClient, orcaPaneKey: srcOrcaPaneKey, herdrPaneId: srcHerdr.herdrPaneId, herdrSocket: srcHerdr.herdrSocket, agentPid: srcAgentPid, agentId: srcAgentId, profileId: (existing && existing.profileId) || profileId || "local", rawSessionId: (existing && existing.rawSessionId) || rawSessionId || sessionId, sessionAutomationIdentity: srcSessionAutomationIdentity, host: srcHost, wslDistro: srcWslDistro, headless: srcHeadless, platform: srcPlatform, model: srcModel, provider: srcProvider, codexOriginator: srcCodexOriginator, codexSource: srcCodexSource, dshCarrier: srcDshCarrier, ghosttyTerminalId: srcGhosttyTerminalId, sessionTitle: srcSessionTitle, sessionTitleFromPrompt: srcSessionTitleFromPrompt, contextUsage: srcContextUsage, contextUsageOrigin: srcContextUsageOrigin, planProgress: srcPlanProgress, metadataUpdatedAt: srcMetadataUpdatedAt, assistantLastOutput: srcAssistantLastOutput, assistantLastOutputTruncated: srcAssistantLastOutputTruncated, lastToolName: srcToolName, transcriptPath: srcTranscriptPath, recentEvents, pidReachable, lastToolBoundaryAt: srcLastToolBoundaryAt, lastStopAt: srcLastStopAt, awaitingInputSinceStop: resolveAwaitingInputSinceStop(existing, event), muteNotificationSound: state === "notification" && muteNotificationSound === true, claudeBackgroundSubagentHoldAt };
   // Desktop apps can reopen a previous conversation on launch, so SessionStart
   // only means "opened" — not "used". Any other lifecycle event is a real action
   // and clears the marker. Only the listed agents carry the field; others are
