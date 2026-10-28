@@ -241,9 +241,12 @@ describe("server-route-state Codex ambient-suggestion marker", () => {
 
 describe("server-route-state POST", () => {
   it("routes local Codex hooks by transcript home and fails closed when profile ownership is ambiguous", async () => {
+    const home = path.join(os.tmpdir(), "clawd-codex-state-profiles");
+    const defaultHome = path.join(home, ".codex");
+    const companyHome = path.join(home, "company-codex");
     const profiles = normalizeCodexProfileConfig({
-      profiles: [{ id: "company", label: "Company", home: "/profiles/company-codex" }],
-    }, { home: "/profiles", env: {} });
+      profiles: [{ id: "company", label: "Company", home: companyHome }],
+    }, { home, env: {} });
     const rawSessionId = "codex:shared-state-id";
     const base = {
       agent_id: "codex",
@@ -251,11 +254,11 @@ describe("server-route-state POST", () => {
       hook_source: "codex-official",
       event: "UserPromptSubmit",
       state: "thinking",
-      transcript_path: "/profiles/company-codex/sessions/rollout.jsonl",
+      transcript_path: path.join(companyHome, "sessions", "rollout.jsonl"),
     };
     const personal = await callStatePost(JSON.stringify({
       ...base,
-      transcript_path: "/profiles/.codex/sessions/rollout.jsonl",
+      transcript_path: path.join(defaultHome, "sessions", "rollout.jsonl"),
     }), { ctx: { getCodexProfiles: () => profiles } });
     assert.equal(personal.statusCode, 200);
     assert.equal(personal.calls.updateSession[0][0], localSessionKey(rawSessionId));

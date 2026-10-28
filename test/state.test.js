@@ -2989,6 +2989,36 @@ describe("updateSession()", () => {
     assert.equal(api.sessions.get("claude-session").codexProfileId, undefined);
   });
 
+  it("passes distinct ephemeral recap identities for identical Codex tool calls across local profiles", () => {
+    const { createMemoryRecapSink } = require("../src/recap-sink");
+    const recapSink = createMemoryRecapSink({ captureEphemeralIdentity: true });
+    api.cleanup();
+    ctx = makeCtx({ recapSink });
+    api = require("../src/state")(ctx);
+    const rawSessionId = "codex:shared-recap-id";
+    const defaultSessionKey = makeSessionKey({ profileId: "local", rawSessionId });
+    const companySessionKey = makeSessionKey({
+      profileId: "local", rawSessionId: "codex-profile:company:" + rawSessionId,
+    });
+    for (const [sessionId, extra] of [
+      [defaultSessionKey, {}],
+      [companySessionKey, { codexProfileId: "company", codexProfileLabel: "Company" }],
+    ]) {
+      api.updateSession(sessionId, "working", "PreToolUse", {
+        agentId: "codex",
+        profileId: "local",
+        rawSessionId,
+        toolUseId: "reused-tool-call",
+        ...extra,
+      });
+    }
+    const identities = recapSink.identitySnapshot().filter((entry) =>
+      entry.dedupeId === "tool-call:reused-tool-call");
+    assert.equal(identities.length, 2);
+    assert.deepStrictEqual(identities.map((entry) => entry.scopeId), ["local", "codex-profile:company"]);
+    assert.deepStrictEqual(identities.map((entry) => entry.sessionId), [rawSessionId, rawSessionId]);
+  });
+
   it("attention is oneshot — stored as idle in session", () => {
     update(api, { id: "s1", state: "working" });
     mock.timers.tick(1000); // past MIN_DISPLAY_MS.working

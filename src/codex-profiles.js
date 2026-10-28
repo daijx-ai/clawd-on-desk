@@ -36,6 +36,25 @@ function pathContains(root, candidate) {
     && relative !== ".." && !relative.startsWith(`..${path.sep}`));
 }
 
+// Resolve existing symlinks (and junctions on Windows), even when a Codex
+// sessions directory or a future transcript does not exist yet. Never inspect
+// files inside the home: this only resolves directory identities.
+function physicalPath(value) {
+  let current = path.resolve(value);
+  const missing = [];
+  for (;;) {
+    try {
+      return path.join(fs.realpathSync.native(current), ...missing.reverse());
+    } catch (error) {
+      if (!error || error.code !== "ENOENT") return null;
+      const parent = path.dirname(current);
+      if (parent === current) return null;
+      missing.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
 function normalizeCodexProfileConfig(config, options = {}) {
   const home = typeof options.home === "string" && path.isAbsolute(options.home)
     ? path.resolve(options.home)
@@ -67,7 +86,7 @@ function normalizeCodexProfileConfig(config, options = {}) {
   const accepted = [];
   const ids = new Set([DEFAULT_CODEX_PROFILE_ID]);
   const labels = new Set(["codex"]);
-  const homes = [defaultHome];
+  const homes = [physicalPath(defaultHome) || defaultHome];
   for (const entry of config.profiles) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)
       || Object.keys(entry).some((key) => !PROFILE_CONFIG_KEYS.has(key))) return failClosed();
@@ -78,12 +97,14 @@ function normalizeCodexProfileConfig(config, options = {}) {
     if (!PROFILE_ID_RE.test(id) || ids.has(id) || !label || labels.has(labelKey) || !profileHome) {
       return failClosed();
     }
-    if (homes.some((existing) => pathContains(existing, profileHome) || pathContains(profileHome, existing))) {
+    const physicalHome = physicalPath(profileHome);
+    if (!physicalHome || homes.some((existing) =>
+      pathContains(existing, physicalHome) || pathContains(physicalHome, existing))) {
       return failClosed();
     }
     ids.add(id);
     labels.add(labelKey);
-    homes.push(profileHome);
+    homes.push(physicalHome);
     accepted.push({
       id,
       label,
@@ -123,7 +144,12 @@ function resolveCodexProfile(transcriptPath, profiles) {
   if (typeof transcriptPath === "string" && transcriptPath.trim()) {
     const normalizedTranscript = normalizeHomePath(transcriptPath, os.homedir());
     if (!normalizedTranscript) return null;
-    const matches = configuredProfiles.filter((profile) => pathContains(profile.home, normalizedTranscript));
+    const physicalTranscript = physicalPath(normalizedTranscript);
+    if (!physicalTranscript) return configuredProfiles.length === 1 ? configuredProfiles[0] : null;
+    const matches = configuredProfiles.filter((profile) => {
+      const home = physicalPath(profile.home);
+      return !!home && pathContains(home, physicalTranscript);
+    });
     if (matches.length === 1) return matches[0];
     return matches.length === 0 && configuredProfiles.length === 1
       ? configuredProfiles[0]

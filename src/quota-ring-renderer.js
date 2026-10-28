@@ -279,7 +279,11 @@ function buildCoinModel(source, def, now, multiSource) {
   const localSourceLabel = def.key === "codexSparkQuota"
     ? t("dashboardQuotaSectionCodexSpark")
     : (def.key === "codexQuota" ? t("dashboardQuotaSectionCodex") : t("dashboardQuotaSourceLocal"));
-  const visibleHost = multiSource
+  // An additional local Codex profile must identify itself even when the
+  // default profile has no quota to render.
+  const namedLocalCodex = typeof source.sourceKey === "string"
+    && source.sourceKey.startsWith("codex-profile:");
+  const visibleHost = (multiSource || namedLocalCodex)
     ? (source.host || localSourceLabel)
     : null;
   return {

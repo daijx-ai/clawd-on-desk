@@ -861,7 +861,11 @@ function formatResetDate(resetAt) {
 function buildQuotaSourceHeader(sourceEntry, providerEntry, baseLabel, providerKey) {
   const parts = [];
   const multiSource = sourceEntry.multiSource === true;
-  if (multiSource) {
+  // Extra local Codex subscriptions are labeled even if they are the only
+  // currently reporting source. A lone default source stays compact.
+  const namedLocalCodex = typeof sourceEntry.sourceKey === "string"
+    && sourceEntry.sourceKey.startsWith("codex-profile:");
+  if (multiSource || namedLocalCodex) {
     const localLabel = providerKey === "codexSparkQuota"
       ? t("dashboardQuotaSectionCodexSpark")
       : (providerKey === "codexQuota" ? t("dashboardQuotaSectionCodex") : t("dashboardQuotaSourceLocal"));

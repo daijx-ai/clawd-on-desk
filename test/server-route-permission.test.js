@@ -2865,23 +2865,57 @@ describe("server-route-permission Windows B1a Codex metadata", () => {
 });
 
 describe("server-route-permission local Codex profile routing", () => {
+  it("retains native default permission handling when config is missing or invalid", async () => {
+    const os = require("node:os");
+    const path = require("node:path");
+    const home = path.join(os.tmpdir(), "clawd-default-codex-route");
+    const rawSessionId = "codex:default-permission-key";
+    const body = JSON.stringify({
+      agent_id: "codex",
+      hook_source: "codex-official",
+      hook_event_name: "PermissionRequest",
+      session_id: rawSessionId,
+      tool_name: "Bash",
+      tool_input: { command: "npm test" },
+    });
+    for (const config of [null, { profiles: [{ id: "../bad", label: "Bad", home: home }] }]) {
+      const profiles = normalizeCodexProfileConfig(config, { home, env: {} });
+      assert.equal(profiles.length, 1);
+      const response = await callPermissionPost(body, {
+        ctx: { getCodexProfiles: () => profiles },
+      });
+      assert.equal(response.ctx.calls.updateSession[0][0], localSessionKey(rawSessionId));
+      assert.equal(response.ctx.calls.updateSession[0][3].profileId, "local");
+      assert.equal(response.ctx.calls.updateSession[0][3].codexProfileId, undefined);
+      assert.equal(response.ctx.pendingPermissions.length, 1,
+        "default Codex requests still enter Clawd's permission handling");
+      assert.equal(response.ctx.pendingPermissions[0].sessionId, localSessionKey(rawSessionId));
+      assert.notEqual(response.statusCode, 204, "invalid extra config must not trigger native fallback");
+    }
+  });
+
   it("keeps Company permission state on the profile key and returns no-decision for ambiguous hooks", async () => {
+    const os = require("node:os");
+    const path = require("node:path");
+    const home = path.join(os.tmpdir(), "clawd-codex-permission-profiles");
+    const defaultHome = path.join(home, ".codex");
+    const companyHome = path.join(home, "company-codex");
     const profiles = normalizeCodexProfileConfig({
-      profiles: [{ id: "company", label: "Company", home: "/profiles/company-codex" }],
-    }, { home: "/profiles", env: {} });
+      profiles: [{ id: "company", label: "Company", home: companyHome }],
+    }, { home, env: {} });
     const rawSessionId = "codex:shared-permission-id";
     const base = {
       agent_id: "codex",
       hook_source: "codex-official",
       hook_event_name: "PermissionRequest",
       session_id: rawSessionId,
-      transcript_path: "/profiles/company-codex/sessions/rollout.jsonl",
+      transcript_path: path.join(companyHome, "sessions", "rollout.jsonl"),
       tool_name: "Bash",
       tool_input: { command: "npm test" },
     };
     const personal = await callPermissionPost(JSON.stringify({
       ...base,
-      transcript_path: "/profiles/.codex/sessions/personal.jsonl",
+      transcript_path: path.join(defaultHome, "sessions", "personal.jsonl"),
     }), { ctx: { getCodexProfiles: () => profiles } });
     assert.equal(personal.ctx.calls.updateSession[0][0], localSessionKey(rawSessionId));
     assert.equal(personal.ctx.calls.updateSession[0][3].codexProfileId, "default");

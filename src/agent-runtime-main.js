@@ -652,6 +652,7 @@ function createAgentRuntimeMain(options = {}) {
       rawSessionId: sessionIdentity.rawSessionId,
       agentId: "codex",
       profileId: sessionIdentity.profileId,
+      codexProfileId: sessionOptions.codexProfileId || null,
       event,
       toolUseId: sessionOptions.toolUseId || null,
       recapDedupeId: sessionOptions.recapDedupeId || null,

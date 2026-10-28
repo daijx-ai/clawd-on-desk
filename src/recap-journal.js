@@ -132,7 +132,16 @@ function createRecapJournal(options = {}) {
     const requestedTimeZone = getTimeZone();
     const timeZoneId = isValidTimeZone(requestedTimeZone) ? requestedTimeZone : "UTC";
     const local = freezeLocalTime(canonical.occurredAt, timeZoneId);
-    const scopeId = canonical.scope === "local" ? "local" : identity.scopeId || canonical.scope;
+    // Historically all local sessions share one scope hash. Keep that exact
+    // default while allowing internally verified extra Codex profiles to
+    // namespace otherwise identical upstream session/tool IDs. Persist only
+    // HMACs, never the raw profile identifier.
+    const localCodexProfileScope = canonical.agentId === "codex"
+      && typeof identity.scopeId === "string"
+      && /^codex-profile:[a-z0-9][a-z0-9_-]{0,31}$/.test(identity.scopeId);
+    const scopeId = canonical.scope === "local"
+      ? (localCodexProfileScope ? identity.scopeId : "local")
+      : identity.scopeId || canonical.scope;
     const scopeKeyHash = store.hmac("scope", canonical.scope, scopeId);
     const record = {
       schemaVersion: 1,

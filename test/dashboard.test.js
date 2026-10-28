@@ -5,6 +5,7 @@ const EventEmitter = require("node:events");
 const fs = require("node:fs");
 const Module = require("node:module");
 const path = require("node:path");
+const vm = require("node:vm");
 const { describe, it } = require("node:test");
 
 const DASHBOARD_MODULE_PATH = require.resolve("../src/dashboard");
@@ -1708,6 +1709,24 @@ describe("dashboard window", () => {
     assert.match(rendererSource, /computeQuotaSummarySignature\(accountQuota\)/);
     assert.match(rendererSource, /if \(signature === lastQuotaSummarySignature\) return;/);
     assert.match(rendererSource, /resetDateFormatterLang !== lang/);
+  });
+
+  it("identifies the only additional local Codex quota while keeping default-only headers compact", () => {
+    const rendererSource = fs.readFileSync(path.join(__dirname, "..", "src", "dashboard-renderer.js"), "utf8");
+    const functionSource = rendererSource.match(/function buildQuotaSourceHeader\([\s\S]*?^}/m);
+    assert.ok(functionSource);
+    const buildHeader = vm.runInNewContext(functionSource[0] + "\n buildQuotaSourceHeader", {
+      t: (key) => key,
+      quotaStaleAfterMs: () => 100000000,
+      formatAsOf: () => "stale",
+    });
+    const currentQuota = { lastSeenAt: Date.now() };
+    assert.equal(buildHeader({
+      sourceKey: "codex-profile:company", host: "Company", multiSource: false,
+    }, currentQuota, null, "codexQuota"), "Company");
+    assert.equal(buildHeader({
+      sourceKey: null, host: null, multiSource: false,
+    }, currentQuota, null, "codexQuota"), null);
   });
 
   it("does not replace an open session automation picker on the one-second render tick", () => {

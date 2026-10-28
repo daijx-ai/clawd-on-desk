@@ -322,6 +322,29 @@ describe("quota ring renderer model", () => {
     assert.equal(company.host, "Company");
   });
 
+  it("shows an additional Codex profile label when it is the only quota source", () => {
+    const context = loadRenderer();
+    const now = 1_000_000;
+    const quota = {
+      group: { codexWeekly: { usedPercent: 80, resetAt: now + 3_600_000, windowMinutes: 10080 } },
+      lastSeenAt: now,
+    };
+    const onlyExtra = modelFor(context, {
+      sourceKey: "codex-profile:company", host: "Company", codexQuota: quota,
+    }, 2, now, false);
+    assert.equal(onlyExtra.sourceMarker, "Company");
+    context.__model = onlyExtra;
+    context.__now = now;
+    const row = vm.runInContext("buildCoinRow(__model, __now)", context);
+    assert.equal(row.children[0].children.find((child) => child.className === "source").textContent, "Company");
+
+    const defaultOnly = modelFor(context, {
+      sourceKey: null, host: null, codexQuota: quota,
+    }, 2, now, false);
+    assert.equal(defaultOnly.sourceMarker, null,
+      "the legacy single default subscription still has no source marker");
+  });
+
   it("uses a fresh weekly readout instead of presenting a stale short window as live", () => {
     const context = loadRenderer();
     const now = 1_000_000;

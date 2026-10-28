@@ -222,9 +222,12 @@ describe("agent-runtime-main", () => {
     const FakeMonitor = makeFakeMonitorClass(instances);
     const harness = makeRealStateHarness();
     const classifierSessionIds = [];
+    const home = path.join(os.tmpdir(), "clawd-agent-runtime-profile-test");
+    const personalHome = path.join(home, "personal-codex");
+    const companyHome = path.join(home, ".codex");
     const codexProfiles = normalizeCodexProfileConfig({
-      profiles: [{ id: "company", label: "Company", home: "/profiles/.codex" }],
-    }, { home: "/profiles", env: { CODEX_HOME: "/profiles/personal-codex" } });
+      profiles: [{ id: "company", label: "Company", home: companyHome }],
+    }, { home, env: { CODEX_HOME: personalHome } });
     const runtime = createAgentRuntimeMain({
       codexProfiles,
       loadCodexLogMonitor: () => FakeMonitor,
@@ -242,9 +245,9 @@ describe("agent-runtime-main", () => {
     try {
       runtime.startCodexLogMonitor();
       assert.equal(instances.length, 2);
-      assert.equal(instances[0].agent.logConfig.sessionDir, "/profiles/personal-codex/sessions");
-      assert.equal(instances[1].agent.logConfig.sessionDir, "/profiles/.codex/sessions");
-      assert.equal(instances[1].options.codexDir, "/profiles/.codex");
+      assert.equal(instances[0].agent.logConfig.sessionDir, path.join(personalHome, "sessions"));
+      assert.equal(instances[1].agent.logConfig.sessionDir, path.join(companyHome, "sessions"));
+      assert.equal(instances[1].options.codexDir, companyHome);
 
       const rawSessionId = "codex:shared-session-id";
       const companyKey = codexProfileIdentity(rawSessionId, codexProfiles[1]).sessionId;
@@ -280,9 +283,12 @@ describe("agent-runtime-main", () => {
     const archiveTrackers = [];
     const FakeMonitor = makeFakeMonitorClass(instances);
     const harness = makeRealStateHarness();
+    const home = path.join(os.tmpdir(), "clawd-codex-archive-profiles");
+    const personalHome = path.join(home, ".codex");
+    const companyHome = path.join(home, "company-codex");
     const codexProfiles = normalizeCodexProfileConfig({
-      profiles: [{ id: "company", label: "Company", home: "/profiles/company-codex" }],
-    }, { home: "/profiles", env: {} });
+      profiles: [{ id: "company", label: "Company", home: companyHome }],
+    }, { home, env: {} });
     const runtime = createAgentRuntimeMain({
       codexProfiles,
       loadCodexLogMonitor: () => FakeMonitor,
@@ -318,8 +324,8 @@ describe("agent-runtime-main", () => {
           profileId: "local",
           rawSessionId,
           transcriptPath: profile.id === "default"
-            ? "/profiles/.codex/sessions/personal.jsonl"
-            : "/profiles/company-codex/sessions/company.jsonl",
+            ? path.join(personalHome, "sessions", "personal.jsonl")
+            : path.join(companyHome, "sessions", "company.jsonl"),
           ...(profile.id === "default"
             ? {}
             : { codexProfileId: profile.id, codexProfileLabel: profile.label }),
@@ -834,8 +840,9 @@ describe("agent-runtime-main", () => {
     const calls = [];
     const classifier = { classify: () => null };
     const FakeMonitor = makeFakeMonitorClass(instances);
+    const home = path.join(os.tmpdir(), "clawd-codex-jsonl-callbacks");
     const codexProfiles = normalizeCodexProfileConfig(null, {
-      home: "/users/test",
+      home,
       env: {},
     });
     const runtime = createAgentRuntimeMain({
@@ -853,7 +860,7 @@ describe("agent-runtime-main", () => {
     assert.equal(monitor, instances[0]);
     assert.equal(monitor.started, 1);
     assert.equal(monitor.agent.id, "codex");
-    assert.equal(monitor.agent.logConfig.sessionDir, "/users/test/.codex/sessions");
+    assert.equal(monitor.agent.logConfig.sessionDir, path.join(home, ".codex", "sessions"));
     assert.notEqual(monitor.options.classifier, classifier);
 
     monitor.emit("sid", "working", "response_item:web_search_call", {
@@ -964,6 +971,55 @@ describe("agent-runtime-main", () => {
       ["response_item:web_search_call", "search-idless"],
     ]);
     assert.ok(recapOnly.every((input) => !Object.hasOwn(input, "recapIsWebSearch")));
+  });
+
+  it("scopes late WebSearch-only recaps to their owning local Codex profile", () => {
+    const instances = [];
+    const recaps = [];
+    const home = path.join(os.tmpdir(), "clawd-codex-late-search-profiles");
+    const profiles = normalizeCodexProfileConfig({
+      profiles: [{ id: "company", label: "Company", home: path.join(home, "company") }],
+    }, { home, env: {} });
+    const runtime = createAgentRuntimeMain({
+      codexProfiles: profiles,
+      loadCodexLogMonitor: () => makeFakeMonitorClass(instances),
+      loadCodexAgent: () => ({ id: "codex" }),
+      codexSubagentClassifier: {},
+      isAgentEnabled: () => true,
+      getStateRuntime: () => ({
+        recordRecapEventOnly: (recap) => { recaps.push(recap); return true; },
+      }),
+      updateSession: () => {},
+    });
+    try {
+      runtime.startCodexLogMonitor();
+      assert.equal(instances.length, 2);
+      const rawSessionId = "codex:shared-websearch";
+      profiles.forEach((profile, index) => {
+        const identity = codexProfileIdentity(rawSessionId, profile);
+        const options = {
+          agentId: "codex",
+          hookSource: "codex-official",
+          profileId: "local",
+          rawSessionId,
+          codexProfileId: profile.id,
+          turnId: "same-turn",
+        };
+        runtime.updateSessionFromServer(identity.sessionId, "thinking", "UserPromptSubmit", options);
+        runtime.updateSessionFromServer(identity.sessionId, "attention", "Stop", options);
+        instances[index].emit(rawSessionId, "working", "response_item:web_search_call", {
+          turnId: "same-turn",
+          recapOccurredAt: 1234,
+          toolUseId: "same-websearch-call",
+        });
+      });
+      assert.deepEqual(recaps.map((entry) => entry.codexProfileId), [null, "company"]);
+      assert.equal(recaps[0].rawSessionId, recaps[1].rawSessionId);
+      assert.equal(recaps[0].toolUseId, recaps[1].toolUseId);
+      assert.notEqual(recaps[0].sessionId, recaps[1].sessionId);
+    } finally {
+      runtime.cleanup();
+    }
   });
 
   it("shares canonical classifier identity from local JSONL to official hooks without leaking to remote profiles", () => {

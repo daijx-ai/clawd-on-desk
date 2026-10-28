@@ -1309,6 +1309,13 @@ function resolveRecapScopeId(input) {
   const scope = resolveRecapScope(input);
   if (scope === "remote") return input.profileId;
   if (scope === "wsl") return input.wslDistro || "wsl";
+  // The journal HMACs the ephemeral scope/session/dedupe identifiers before
+  // persisting them. Keep the legacy default scope exactly as before, but
+  // isolate additional local Codex profiles sharing upstream raw IDs.
+  if (input && input.agentId === "codex" && input.codexProfileId
+    && input.codexProfileId !== DEFAULT_CODEX_PROFILE_ID) {
+    return `codex-profile:${input.codexProfileId}`;
+  }
   return "local";
 }
 
@@ -2122,6 +2129,7 @@ function promoteCompletion(sessionId, completionPayload = undefined) {
     rawSessionId: session.rawSessionId || sessionId,
     agentId: session.agentId,
     profileId: session.profileId || "local",
+    codexProfileId: session.codexProfileId || null,
     host: session.host || null,
     wslDistro: session.wslDistro || null,
     event: "Stop",
@@ -2437,6 +2445,7 @@ function updateSession(sessionId, state, event, opts = {}) {
       rawSessionId: (sessionForPerm && sessionForPerm.rawSessionId) || rawSessionId || sessionId,
       agentId: permAgentId,
       profileId: (sessionForPerm && sessionForPerm.profileId) || profileId || "local",
+      codexProfileId: (sessionForPerm && sessionForPerm.codexProfileId) || codexProfileId || null,
       host: host || (sessionForPerm && sessionForPerm.host) || null,
       wslDistro: wslDistro || (sessionForPerm && sessionForPerm.wslDistro) || null,
       event,
@@ -2875,6 +2884,7 @@ function updateSession(sessionId, state, event, opts = {}) {
       rawSessionId: (existing && existing.rawSessionId) || rawSessionId || sessionId,
       agentId: srcAgentId,
       profileId: (existing && existing.profileId) || profileId || "local",
+      codexProfileId: srcCodexProfile.codexProfileId || null,
       host: srcHost,
       wslDistro: srcWslDistro,
       event,
